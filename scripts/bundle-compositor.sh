@@ -116,6 +116,18 @@ for nm_ver_dir in /usr/lib/x86_64-linux-gnu/NetworkManager/*; do
     fi
 done
 
+# Bundle netplan generate/configure C helpers (Ubuntu's NetworkManager invokes
+# /usr/libexec/netplan/generate when saving Wi-Fi keyfile profiles)
+if [ -d /usr/libexec/netplan ]; then
+    mkdir -p "${TARGET_ROOT}/usr/libexec/netplan"
+    for np_bin in /usr/libexec/netplan/generate /usr/libexec/netplan/configure; do
+        if [ -x "${np_bin}" ]; then
+            install -m 0755 "${np_bin}" "${TARGET_ROOT}${np_bin}"
+            copy_lib_and_deps "${np_bin}"
+        fi
+    done
+fi
+
 # Bundle serenity-sysd (Rust System D-Bus daemon for login1 SetBrightness/PowerOff + UPower)
 SYSD_BIN="${ROOT_DIR}/target/x86_64-unknown-linux-musl/release/serenity-sysd"
 if [ -x "${SYSD_BIN}" ]; then

@@ -367,6 +367,11 @@ fn handle_multicall_applet() -> bool {
                 println!("[serenity] Starting NetworkManager (Wi-Fi & Ethernet)...");
                 let _ = fs::create_dir_all("/var/lib/NetworkManager");
                 let _ = fs::create_dir_all("/etc/NetworkManager/system-connections");
+                let _ = fs::create_dir_all("/etc/netplan");
+                let _ = fs::create_dir_all("/run/NetworkManager/system-connections");
+                if !Path::new("/etc/machine-id").exists() {
+                    let _ = fs::write("/etc/machine-id", "5e7e1170a1b2c3d4e5f60718293a4b5c\n");
+                }
                 let _ = Command::new("/usr/bin/NetworkManager")
                     .args(["--no-daemon"])
                     .stdin(std::process::Stdio::null())
