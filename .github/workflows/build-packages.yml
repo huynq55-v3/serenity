@@ -152,7 +152,8 @@ jobs:
               elif [ "${{ matrix.package }}" = "steam" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends \
-                  zstd binutils curl grep sed gawk findutils tar xz-utils gzip procps file
+                  zstd binutils curl grep sed gawk findutils tar xz-utils gzip procps file \
+                  diffutils util-linux libc-bin
               else
                 command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
               fi

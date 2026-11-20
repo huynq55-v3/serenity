@@ -1,6 +1,6 @@
 [package]
 name = "steam"
-version = "1.0.2"
+version = "1.0.3"
 arch = "x86_64-gnu"
 description = "Steam gaming client (official deb + Xwayland + lib32 + GNU runtime utilities)"
 deps = ["clibrary", "pipewire", "xwayland", "lib32", "bash"]
@@ -48,7 +48,7 @@ copy_with_deps() {
 
 mkdir -p "${STAGE_DIR}/usr/bin" "${STAGE_DIR}/sbin" "${STAGE_DIR}/usr/sbin"
 
-for tool in grep sed gawk find xargs tar xz gzip curl ps file; do
+for tool in grep sed gawk find xargs tar xz gzip curl ps file cmp getopt; do
     BIN_PATH="$(command -v "${tool}" || true)"
     if [ -n "${BIN_PATH}" ] && [ -x "${BIN_PATH}" ]; then
         copy_with_deps "${BIN_PATH}" "${STAGE_DIR}/usr/bin/${tool}"
@@ -57,6 +57,12 @@ for tool in grep sed gawk find xargs tar xz gzip curl ps file; do
         exit 1
     fi
 done
+
+LDD_BIN="$(command -v ldd || echo /usr/bin/ldd)"
+if [ -x "${LDD_BIN}" ]; then
+    cp -L "${LDD_BIN}" "${STAGE_DIR}/usr/bin/ldd"
+    chmod 0755 "${STAGE_DIR}/usr/bin/ldd"
+fi
 
 ln -sf gawk "${STAGE_DIR}/usr/bin/awk"
 ln -sf /bin/env "${STAGE_DIR}/usr/bin/env"
