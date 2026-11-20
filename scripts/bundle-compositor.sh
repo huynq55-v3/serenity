@@ -53,10 +53,13 @@ for b in "${COMP_BIN}" "${LOGIN_BIN}" "${SHELL_BIN}" "${ALACRITTY_BIN}"; do
     [ -n "${b}" ] && [ -x "${b}" ] && copy_lib_and_deps "${b}"
 done
 
-# Also bundle EGL/GLES2/GBM/Mesa DRI drivers dynamically loaded via dlopen()
+# Also bundle EGL/GLES2/GBM/Mesa DRI + COSMIC/Alacritty runtime shared libraries
 for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
     [ -d "${libdir}" ] || continue
-    for pat in "libEGL*.so*" "libGLESv2*.so*" "libGLdispatch*.so*" "libgbm*.so*" "libgallium*.so*" "libLLVM*.so*"; do
+    for pat in \
+        "libEGL*.so*" "libGLESv2*.so*" "libGLdispatch*.so*" "libgbm*.so*" "libgallium*.so*" "libLLVM*.so*" \
+        "libdisplay-info*.so*" "libseat*.so*" "libpixman-1*.so*" "libdav1d*.so*" \
+        "libfontconfig*.so*" "libfreetype*.so*" "libsystemd*.so*"; do
         for f in ${libdir}/${pat}; do
             [ -e "$f" ] || continue
             mkdir -p "${TARGET_ROOT}${libdir}"
