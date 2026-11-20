@@ -1,0 +1,13 @@
+[package]
+name = "cosmic-applets"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC Panel & Dock applets (app list, clock, network, power)"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-applets.git"
+
+[install]
+files = { "cosmic-applets" = "usr/bin/cosmic-applets" }

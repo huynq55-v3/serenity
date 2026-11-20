@@ -1,0 +1,13 @@
+[package]
+name = "cosmic-settings-daemon"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC settings daemon (required by cosmic-session)"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-settings-daemon.git"
+
+[install]
+files = { "cosmic-settings-daemon" = "usr/bin/cosmic-settings-daemon" }

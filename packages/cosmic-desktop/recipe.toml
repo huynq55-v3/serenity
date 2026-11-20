@@ -2,10 +2,12 @@
 name = "cosmic-desktop"
 version = "0.1.0"
 arch = "any"
-description = "Serenity COSMIC Desktop meta-package (Smithay + Dock + Launcher + App Library)"
+description = "Serenity COSMIC Desktop meta-package (Smithay + Dock + Applets + Launcher + App Library)"
 deps = [
     "cosmic-comp",
+    "cosmic-settings-daemon",
     "cosmic-panel",
+    "cosmic-applets",
     "cosmic-bg",
     "cosmic-launcher",
     "cosmic-app-library",
