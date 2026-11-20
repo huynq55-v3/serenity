@@ -1,12 +1,18 @@
 [package]
 name = "clibrary"
-version = "1.0.2"
+version = "1.0.3"
 arch = "x86_64-gnu"
-description = "Common Linux C/C++ runtime libraries (GTK3, NSS, NSPR, Cairo, Pango, ATK, X11, ALSA, CUPS, Kerberos, GLib) for Chrome, Antigravity & Electron apps"
+description = "Common Linux C/C++ runtime libraries (GTK3 + GSettings schemas, NSS, NSPR, Cairo, Pango, ATK, X11, ALSA, CUPS, Kerberos, GLib) for Chrome, Antigravity & Electron apps"
 deps = []
 
 [source]
 type = "syslibs"
+extra_paths = [
+    "/usr/share/glib-2.0/schemas/gschemas.compiled",
+    "/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache",
+    "/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders",
+    "/usr/share/mime/mime.cache",
+]
 patterns = [
     # GTK 3 & Secret Service (required by Electron apps: Antigravity, VS Code, Discord)
     "libgtk-3.so*",

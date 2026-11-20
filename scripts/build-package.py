@@ -188,6 +188,22 @@ def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
                 matched += 1
 
     print(f"  -> Collected {len(seen)} shared library file(s)/symlink(s) from {matched} pattern matches.")
+
+    # Optional extra host data files/dirs declared in [source] extra_paths = [...]
+    # (e.g. /usr/share/glib-2.0/schemas/gschemas.compiled for GTK3 file chooser dialogs)
+    for raw_path in src.get("extra_paths", []):
+        p = Path(raw_path)
+        if not p.exists():
+            print(f"  -> WARN: optional extra_path not found: {p}")
+            continue
+        dst = stage_dir / str(p).lstrip("/")
+        if p.is_dir():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(p, dst, symlinks=True, dirs_exist_ok=True)
+        elif p.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, dst)
+
     install_assets_and_inline(recipe, None, stage_dir)
 
 
