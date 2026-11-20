@@ -68,12 +68,16 @@ def install_assets_and_inline(recipe: dict, src_dir: Path | None, stage_dir: Pat
     for dst_rel, content in install_cfg.get("inline", {}).items():
         dst_path = stage_dir / dst_rel.lstrip("/")
         dst_path.parent.mkdir(parents=True, exist_ok=True)
+        if dst_path.is_symlink():
+            dst_path.unlink()
         dst_path.write_text(content, encoding="utf-8")
 
     # Write executable inline scripts declared in [install.scripts]
     for dst_rel, content in install_cfg.get("scripts", {}).items():
         dst_path = stage_dir / dst_rel.lstrip("/")
         dst_path.parent.mkdir(parents=True, exist_ok=True)
+        if dst_path.is_symlink():
+            dst_path.unlink()
         dst_path.write_text(content, encoding="utf-8")
         os.chmod(dst_path, 0o755)
 

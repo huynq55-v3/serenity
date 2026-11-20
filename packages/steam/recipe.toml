@@ -1,6 +1,6 @@
 [package]
 name = "steam"
-version = "1.0.0"
+version = "1.0.1"
 arch = "x86_64-gnu"
 description = "Steam gaming client (official deb + Xwayland + lib32 + GNU runtime utilities)"
 deps = ["clibrary", "pipewire", "xwayland", "lib32", "bash"]
@@ -25,6 +25,8 @@ echo "  -> Extracting ${DATA_TAR}..."
 tar -xf "${DATA_TAR}" -C "${STAGE_DIR}"
 
 rm -rf "${STAGE_DIR}/etc/apt" "${STAGE_DIR}/usr/share/doc"
+# Replace upstream /usr/bin/steam -> ../lib/steam/bin_steam.sh symlink so our wrapper doesn't overwrite bin_steam.sh
+rm -f "${STAGE_DIR}/usr/bin/steam"
 
 # Bundle GNU CLI tools & ldconfig expected by /usr/lib/steam/bin_steam.sh and Steam Runtime
 copy_with_deps() {
@@ -122,7 +124,7 @@ if [ -x /sbin/ldconfig ] && [ ! -e /etc/ld.so.cache ]; then
 fi
 
 if [ -z "${DISPLAY:-}" ]; then
-    echo "[steam] WARN: DISPLAY is not set (Xwayland socket not active yet under cosmic-comp)." >&2
+    echo "[steam] WARN: DISPLAY is not set (reboot/re-login once after installing xwayland so cosmic-comp exports DISPLAY=:0)." >&2
 fi
 
 if [ -x /usr/lib/steam/bin_steam.sh ]; then
