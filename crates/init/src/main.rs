@@ -76,6 +76,17 @@ fn setup_environment() {
     }
 }
 
+fn detect_drm_card() -> Option<String> {
+    let entries = fs::read_dir("/dev/dri").ok()?;
+    let mut cards: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with("card"))
+        .collect();
+    cards.sort();
+    cards.into_iter().next().map(|c| format!("/dev/dri/{}", c))
+}
+
 fn print_banner(net_status: Option<&str>, kmods_loaded: usize) {
     let kernel = fs::read_to_string("/proc/sys/kernel/osrelease")
         .map(|s| s.trim().to_string())
@@ -87,10 +98,9 @@ fn print_banner(net_status: Option<&str>, kmods_loaded: usize) {
         .unwrap_or_else(|| "?".to_string());
 
     let net_line = net_status.unwrap_or("offline (no NIC)");
-    let gpu_line = if Path::new("/dev/dri/card0").exists() {
-        "/dev/dri/card0 (DRM/KMS ready)"
-    } else {
-        "console only (no DRM card0)"
+    let gpu_line = match detect_drm_card() {
+        Some(card) => format!("{} (DRM/KMS ready)", card),
+        None => "console only (no DRM card)".to_string(),
     };
 
     println!();
