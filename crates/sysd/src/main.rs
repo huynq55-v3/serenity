@@ -11,8 +11,13 @@
 //!     `cosmic-applet-battery` displays battery percentage + display brightness slider cleanly.
 
 use std::fs;
+use std::net::UdpSocket;
+use std::os::unix::fs::symlink;
 use std::path::Path;
-use zbus::{connection::Builder, fdo, interface, zvariant::OwnedObjectPath};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use zbus::{connection::Builder, fdo, interface, object_server::SignalEmitter, zvariant::OwnedObjectPath};
 
 struct Login1Manager;
 
@@ -213,6 +218,288 @@ impl UPowerDisplayDevice {
     }
 }
 
+/// Synchronizes system wall clock via SNTP (UDP/123). Returns true on success.
+fn sync_clock_sntp() -> bool {
+    const NTP_EPOCH_OFFSET: u64 = 2_208_988_800;
+    for server in ["time.google.com:123", "pool.ntp.org:123", "time.cloudflare.com:123"] {
+        let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else {
+            continue;
+        };
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(3)));
+        let _ = sock.set_write_timeout(Some(Duration::from_secs(3)));
+
+        let mut req = [0u8; 48];
+        req[0] = 0x1b; // LI=0, VN=3, Mode=3 (Client)
+        if sock.send_to(&req, server).is_err() {
+            continue;
+        }
+
+        let mut resp = [0u8; 48];
+        let Ok(n) = sock.recv(&mut resp) else {
+            continue;
+        };
+        if n < 48 {
+            continue;
+        }
+
+        let ntp_sec = u32::from_be_bytes([resp[40], resp[41], resp[42], resp[43]]) as u64;
+        let ntp_frac = u32::from_be_bytes([resp[44], resp[45], resp[46], resp[47]]) as u64;
+        let Some(unix_sec) = ntp_sec.checked_sub(NTP_EPOCH_OFFSET) else {
+            continue;
+        };
+        if unix_sec <= 1_700_000_000 {
+            continue;
+        }
+
+        let nsec = ((ntp_frac * 1_000_000_000) >> 32) as i64;
+        let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+        ts.tv_sec = unix_sec as libc::time_t;
+        ts.tv_nsec = nsec as libc::c_long;
+        let rc = unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) };
+        if rc == 0 {
+            eprintln!("[serenity-sysd] SNTP synchronized clock from {} (unix={})", server, unix_sec);
+            return true;
+        }
+    }
+    false
+}
+
+fn read_current_timezone() -> String {
+    if let Ok(tz) = fs::read_to_string("/etc/timezone") {
+        let trimmed = tz.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Ok(target) = fs::read_link("/etc/localtime") {
+        let target_str = target.to_string_lossy();
+        if let Some(rel) = target_str.strip_prefix("/usr/share/zoneinfo/") {
+            if !rel.is_empty() {
+                return rel.to_string();
+            }
+        }
+    }
+    "UTC".to_string()
+}
+
+fn collect_timezones(base: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if path.is_dir() {
+            if name_str == "posix" || name_str == "right" {
+                continue;
+            }
+            collect_timezones(base, &path, out);
+        } else if path.is_file() {
+            if matches!(
+                name_str,
+                "posixrules"
+                    | "leapseconds"
+                    | "leap-seconds.list"
+                    | "tzdata.zi"
+                    | "zone.tab"
+                    | "zone1970.tab"
+                    | "iso3166.tab"
+                    | "zonenow.tab"
+                    | "SECURITY"
+                    | "README"
+                    | "Factory"
+            ) || name_str.ends_with(".tab")
+                || name_str.ends_with(".list")
+                || name_str.ends_with(".zi")
+            {
+                continue;
+            }
+            if let Ok(rel) = path.strip_prefix(base) {
+                if let Some(rel_str) = rel.to_str() {
+                    out.push(rel_str.to_string());
+                }
+            }
+        }
+    }
+}
+
+struct Timedate1 {
+    ntp_enabled: Arc<AtomicBool>,
+    ntp_synced: Arc<AtomicBool>,
+    local_rtc: AtomicBool,
+}
+
+#[interface(name = "org.freedesktop.timedate1")]
+impl Timedate1 {
+    #[zbus(property, name = "Timezone")]
+    async fn timezone(&self) -> String {
+        read_current_timezone()
+    }
+
+    #[zbus(property, name = "LocalRTC")]
+    async fn local_rtc(&self) -> bool {
+        self.local_rtc.load(Ordering::Relaxed)
+    }
+
+    #[zbus(property, name = "CanNTP")]
+    async fn can_ntp(&self) -> bool {
+        true
+    }
+
+    #[zbus(property, name = "NTP")]
+    async fn ntp(&self) -> bool {
+        self.ntp_enabled.load(Ordering::Relaxed)
+    }
+
+    #[zbus(property, name = "NTPSynchronized")]
+    async fn ntp_synchronized(&self) -> bool {
+        self.ntp_synced.load(Ordering::Relaxed)
+    }
+
+    #[zbus(property, name = "TimeUSec")]
+    async fn time_usec(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0)
+    }
+
+    #[zbus(property, name = "RTCTimeUSec")]
+    async fn rtc_time_usec(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0)
+    }
+
+    async fn set_timezone(
+        &self,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        timezone: &str,
+        _interactive: bool,
+    ) -> fdo::Result<()> {
+        if timezone.is_empty() || timezone.starts_with('/') || timezone.contains("..") {
+            return Err(fdo::Error::InvalidArgs(format!(
+                "invalid timezone: {}",
+                timezone
+            )));
+        }
+        let zone_path = Path::new("/usr/share/zoneinfo").join(timezone);
+        if !zone_path.is_file() {
+            return Err(fdo::Error::InvalidArgs(format!(
+                "unknown timezone: {}",
+                timezone
+            )));
+        }
+
+        match fs::remove_file("/etc/localtime") {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(fdo::Error::Failed(format!(
+                    "failed to remove /etc/localtime: {}",
+                    e
+                )));
+            }
+        }
+        symlink(&zone_path, "/etc/localtime").map_err(|e| {
+            fdo::Error::Failed(format!("failed to symlink /etc/localtime: {}", e))
+        })?;
+        fs::write("/etc/timezone", format!("{}\n", timezone)).map_err(|e| {
+            fdo::Error::Failed(format!("failed to write /etc/timezone: {}", e))
+        })?;
+
+        let _ = self.timezone_changed(&emitter).await;
+        Ok(())
+    }
+
+    async fn set_time(
+        &self,
+        usec_utc: i64,
+        relative: bool,
+        _interactive: bool,
+    ) -> fdo::Result<()> {
+        let mut target_ns: i128 = if relative {
+            let mut cur: libc::timespec = unsafe { std::mem::zeroed() };
+            let rc = unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut cur) };
+            if rc != 0 {
+                return Err(fdo::Error::Failed("clock_gettime failed".to_string()));
+            }
+            (cur.tv_sec as i128) * 1_000_000_000
+                + (cur.tv_nsec as i128)
+                + (usec_utc as i128) * 1_000
+        } else {
+            (usec_utc as i128) * 1_000
+        };
+
+        if target_ns < 0 {
+            return Err(fdo::Error::InvalidArgs(
+                "negative timestamp is not supported".to_string(),
+            ));
+        }
+
+        let secs = target_ns / 1_000_000_000;
+        let nsecs = target_ns % 1_000_000_000;
+        let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+        ts.tv_sec = secs as libc::time_t;
+        ts.tv_nsec = nsecs as libc::c_long;
+        let rc = unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) };
+        if rc != 0 {
+            return Err(fdo::Error::Failed(format!(
+                "clock_settime failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        target_ns = 0;
+        let _ = target_ns;
+        Ok(())
+    }
+
+    #[zbus(name = "SetLocalRTC")]
+    async fn set_local_rtc(
+        &self,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        local_rtc: bool,
+        _fix_system: bool,
+        _interactive: bool,
+    ) -> fdo::Result<()> {
+        self.local_rtc.store(local_rtc, Ordering::Relaxed);
+        let _ = self.local_rtc_changed(&emitter).await;
+        Ok(())
+    }
+
+    #[zbus(name = "SetNTP")]
+    async fn set_ntp(
+        &self,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        use_ntp: bool,
+        _interactive: bool,
+    ) -> fdo::Result<()> {
+        self.ntp_enabled.store(use_ntp, Ordering::Relaxed);
+        if use_ntp {
+            let synced = sync_clock_sntp();
+            self.ntp_synced.store(synced, Ordering::Relaxed);
+        } else {
+            self.ntp_synced.store(false, Ordering::Relaxed);
+        }
+        let _ = self.ntp_changed(&emitter).await;
+        let _ = self.ntp_synchronized_changed(&emitter).await;
+        Ok(())
+    }
+
+    async fn list_timezones(&self) -> fdo::Result<Vec<String>> {
+        let base = Path::new("/usr/share/zoneinfo");
+        let mut zones = Vec::new();
+        collect_timezones(base, base, &mut zones);
+        zones.sort();
+        zones.dedup();
+        Ok(zones)
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wait briefly for /run/dbus/system_bus_socket to appear
@@ -225,17 +512,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
+    let ntp_enabled = Arc::new(AtomicBool::new(true));
+    let ntp_synced = Arc::new(AtomicBool::new(false));
+    let timedate = Timedate1 {
+        ntp_enabled: Arc::clone(&ntp_enabled),
+        ntp_synced: Arc::clone(&ntp_synced),
+        local_rtc: AtomicBool::new(false),
+    };
+
     let _conn = Builder::system()?
         .name("org.freedesktop.login1")?
         .name("org.freedesktop.UPower")?
+        .name("org.freedesktop.timedate1")?
         .serve_at("/org/freedesktop/login1", Login1Manager)?
         .serve_at("/org/freedesktop/login1/session/auto", Login1Session)?
         .serve_at("/org/freedesktop/UPower", UPowerRoot)?
         .serve_at("/org/freedesktop/UPower/devices/DisplayDevice", UPowerDisplayDevice)?
+        .serve_at("/org/freedesktop/timedate1", timedate)?
         .build()
         .await?;
 
-    eprintln!("[serenity-sysd] Serving org.freedesktop.login1 + org.freedesktop.UPower on System D-Bus");
+    let bg_enabled = Arc::clone(&ntp_enabled);
+    let bg_synced = Arc::clone(&ntp_synced);
+    std::thread::spawn(move || {
+        for delay_secs in [2u64, 5, 10, 20, 30] {
+            std::thread::sleep(Duration::from_secs(delay_secs));
+            if !bg_enabled.load(Ordering::Relaxed) {
+                return;
+            }
+            if sync_clock_sntp() {
+                bg_synced.store(true, Ordering::Relaxed);
+                return;
+            }
+        }
+    });
+
+    eprintln!(
+        "[serenity-sysd] Serving org.freedesktop.login1 + org.freedesktop.UPower + org.freedesktop.timedate1 on System D-Bus"
+    );
     std::future::pending::<()>().await;
     Ok(())
 }

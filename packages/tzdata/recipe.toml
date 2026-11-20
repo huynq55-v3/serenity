@@ -1,0 +1,48 @@
+[package]
+name = "tzdata"
+version = "1.0.0"
+arch = "any"
+description = "IANA timezone database (/usr/share/zoneinfo) and set-timezone helper"
+deps = []
+
+[source]
+type = "custom"
+script = """
+if [ ! -d /usr/share/zoneinfo ]; then
+    echo "ERROR: /usr/share/zoneinfo not found on build host" >&2
+    exit 1
+fi
+mkdir -p "${STAGE_DIR}/usr/share"
+cp -a /usr/share/zoneinfo "${STAGE_DIR}/usr/share/"
+"""
+
+[install.scripts]
+"usr/bin/set-timezone" = """#!/bin/sh
+set -eu
+
+if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    echo "Usage: set-timezone <Region/City>"
+    echo "Example: sudo set-timezone Asia/Ho_Chi_Minh"
+    exit 1
+fi
+
+TZ_NAME="$1"
+case "$TZ_NAME" in
+    /*|*..*)
+        echo "ERROR: Invalid timezone '$TZ_NAME'" >&2
+        exit 1
+        ;;
+esac
+
+ZONE_FILE="/usr/share/zoneinfo/$TZ_NAME"
+if [ ! -f "$ZONE_FILE" ]; then
+    echo "ERROR: Timezone '$TZ_NAME' not found at $ZONE_FILE" >&2
+    exit 1
+fi
+
+rm -f /etc/localtime
+ln -sf "$ZONE_FILE" /etc/localtime
+printf '%s\n' "$TZ_NAME" > /etc/timezone
+
+echo "Timezone updated to $TZ_NAME ($(date))"
+"""

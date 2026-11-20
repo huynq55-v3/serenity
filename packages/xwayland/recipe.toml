@@ -1,0 +1,38 @@
+[package]
+name = "xwayland"
+version = "1.0.0"
+arch = "x86_64-gnu"
+description = "Xwayland X11 compatibility server (Xwayland + xkbcomp + xauth) for Steam and X11 apps"
+deps = ["clibrary"]
+
+[source]
+type = "custom"
+script = """
+mkdir -p "${STAGE_DIR}/usr/bin"
+
+copy_with_deps() {
+    local bin="$1"
+    local dst="$2"
+    mkdir -p "$(dirname "${dst}")"
+    cp -L "${bin}" "${dst}"
+    chmod 0755 "${dst}"
+    ldd "${bin}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+        [ -f "${lib}" ] || continue
+        case "$(basename "${lib}")" in
+            ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
+        esac
+        local ldst="${STAGE_DIR}${lib}"
+        mkdir -p "$(dirname "${ldst}")"
+        [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
+    done
+}
+
+for tool in Xwayland xkbcomp xauth; do
+    BIN_PATH="$(command -v "${tool}" || true)"
+    if [ -z "${BIN_PATH}" ] || [ ! -x "${BIN_PATH}" ]; then
+        echo "ERROR: Missing required tool '${tool}' on build host" >&2
+        exit 1
+    fi
+    copy_with_deps "${BIN_PATH}" "${STAGE_DIR}/usr/bin/${tool}"
+done
+"""

@@ -175,6 +175,12 @@ if [ -d /usr/lib/x86_64-linux-gnu/ossl-modules ]; then
     cp -a /usr/lib/x86_64-linux-gnu/ossl-modules/. "${TARGET_ROOT}/usr/lib/x86_64-linux-gnu/ossl-modules/" 2>/dev/null || true
 fi
 
+# Bundle IANA timezone database (/usr/share/zoneinfo) for timedate1 & COSMIC Settings
+if [ -d /usr/share/zoneinfo ]; then
+    mkdir -p "${TARGET_ROOT}/usr/share"
+    cp -a /usr/share/zoneinfo "${TARGET_ROOT}/usr/share/" 2>/dev/null || true
+fi
+
 # Bundle serenity-sysd (Rust System D-Bus daemon for login1 SetBrightness/PowerOff + UPower)
 SYSD_BIN="${ROOT_DIR}/target/x86_64-unknown-linux-musl/release/serenity-sysd"
 if [ -x "${SYSD_BIN}" ]; then

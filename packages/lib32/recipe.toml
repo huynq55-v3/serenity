@@ -1,0 +1,60 @@
+[package]
+name = "lib32"
+version = "1.0.0"
+arch = "x86_64-gnu"
+description = "32-bit (i386) GNU dynamic linker, glibc, Mesa/Vulkan, X11 & audio runtime libraries for Steam"
+deps = []
+
+[source]
+type = "custom"
+script = """
+if [ ! -d /usr/lib/i386-linux-gnu ]; then
+    echo "ERROR: /usr/lib/i386-linux-gnu not found on build host (enable i386 multiarch first)" >&2
+    exit 1
+fi
+
+mkdir -p "${STAGE_DIR}/lib" "${STAGE_DIR}/usr/lib" "${STAGE_DIR}/etc/ld.so.conf.d"
+
+# Copy 32-bit dynamic linker (e.g. /lib/ld-linux.so.2 or /usr/lib/i386-linux-gnu/ld-linux.so.2)
+LD32_SRC=""
+for cand in /lib/ld-linux.so.2 /usr/lib/ld-linux.so.2 /lib/i386-linux-gnu/ld-linux.so.2 /usr/lib/i386-linux-gnu/ld-linux.so.2; do
+    if [ -e "${cand}" ]; then
+        LD32_SRC="${cand}"
+        break
+    fi
+done
+if [ -z "${LD32_SRC}" ]; then
+    echo "ERROR: 32-bit dynamic linker ld-linux.so.2 not found on build host" >&2
+    exit 1
+fi
+
+cp -L "${LD32_SRC}" "${STAGE_DIR}/lib/ld-linux.so.2"
+chmod 0755 "${STAGE_DIR}/lib/ld-linux.so.2"
+
+# Copy full 32-bit multiarch library tree preserving symlinks (includes libc, libstdc++, Mesa DRI/GL/Vulkan, X11, Pulse/ALSA, NSS)
+cp -a /usr/lib/i386-linux-gnu "${STAGE_DIR}/usr/lib/"
+mkdir -p "${STAGE_DIR}/usr/lib/i386-linux-gnu"
+if [ ! -e "${STAGE_DIR}/usr/lib/i386-linux-gnu/ld-linux.so.2" ]; then
+    ln -sf /lib/ld-linux.so.2 "${STAGE_DIR}/usr/lib/i386-linux-gnu/ld-linux.so.2"
+fi
+
+# Copy 32-bit Vulkan ICD manifests if installed
+if [ -d /usr/share/vulkan/icd.d ]; then
+    for icd in /usr/share/vulkan/icd.d/*i686*.json; do
+        if [ -f "${icd}" ]; then
+            mkdir -p "${STAGE_DIR}/usr/share/vulkan/icd.d"
+            cp -a "${icd}" "${STAGE_DIR}/usr/share/vulkan/icd.d/"
+        fi
+    done
+fi
+"""
+
+[install.inline]
+"etc/ld.so.conf" = """include /etc/ld.so.conf.d/*.conf
+"""
+"etc/ld.so.conf.d/i386-linux-gnu.conf" = """/usr/lib/i386-linux-gnu
+/lib/i386-linux-gnu
+"""
+"etc/ld.so.conf.d/x86_64-linux-gnu.conf" = """/usr/lib/x86_64-linux-gnu
+/lib/x86_64-linux-gnu
+"""

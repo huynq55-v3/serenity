@@ -1,0 +1,55 @@
+[package]
+name = "cosmic-files"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC Files native Wayland file manager (Rust + libcosmic) and xdg-open helper"
+deps = ["clibrary"]
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-files.git"
+
+[install]
+files = { "cosmic-files" = "usr/bin/cosmic-files" }
+
+[install.scripts]
+"usr/bin/xdg-open" = """#!/bin/sh
+if [ $# -lt 1 ]; then
+    exit 1
+fi
+TARGET="$1"
+case "$TARGET" in
+    http://*|https://*)
+        if command -v google-chrome >/dev/null 2>&1; then
+            exec google-chrome "$TARGET"
+        fi
+        ;;
+    file://*)
+        TARGET="${TARGET#file://}"
+        ;;
+esac
+
+if [ -d "$TARGET" ]; then
+    exec /usr/bin/cosmic-files "$TARGET"
+elif [ -e "$TARGET" ]; then
+    PARENT="$(dirname "$TARGET")"
+    exec /usr/bin/cosmic-files "$PARENT"
+fi
+exec /usr/bin/cosmic-files "$TARGET"
+"""
+
+[install.inline]
+"usr/share/applications/com.system76.CosmicFiles.desktop" = """[Desktop Entry]
+Name=Files
+GenericName=File Manager
+Comment=Browse and manage files and folders
+Type=Application
+Exec=cosmic-files %U
+Terminal=false
+Categories=Utility;FileManager;COSMIC;
+Keywords=Folder;Manager;Explore;Disk;Filesystem;COSMIC;
+Icon=system-file-manager
+StartupNotify=true
+StartupWMClass=com.system76.CosmicFiles
+MimeType=inode/directory;
+"""

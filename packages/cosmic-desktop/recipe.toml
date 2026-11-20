@@ -1,8 +1,8 @@
 [package]
 name = "cosmic-desktop"
-version = "0.1.1"
+version = "0.1.2"
 arch = "any"
-description = "Serenity COSMIC Desktop meta-package (Smithay + Dock + Applets + Notifications + Launcher + App Library)"
+description = "Serenity COSMIC Desktop meta-package (Smithay + Dock + Applets + Notifications + Launcher + App Library + Files + Timezone)"
 deps = [
     "cosmic-comp",
     "cosmic-settings-daemon",
@@ -12,7 +12,9 @@ deps = [
     "cosmic-bg",
     "cosmic-launcher",
     "cosmic-app-library",
+    "cosmic-files",
     "cosmic-session",
+    "tzdata",
 ]
 
 [source]
@@ -22,6 +24,7 @@ type = "meta"
 # Default COSMIC Dock favorites (install extra apps like `spkg install alacritty` anytime)
 "usr/share/cosmic/com.system76.CosmicAppList/v1/favorites" = """[
     "com.system76.CosmicAppLibrary",
+    "com.system76.CosmicFiles",
 ]
 """
 

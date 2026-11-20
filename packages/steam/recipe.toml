@@ -1,0 +1,132 @@
+[package]
+name = "steam"
+version = "1.0.0"
+arch = "x86_64-gnu"
+description = "Steam gaming client (official deb + Xwayland + lib32 + GNU runtime utilities)"
+deps = ["clibrary", "pipewire", "xwayland", "lib32", "bash"]
+
+[source]
+type = "custom"
+script = """
+STEAM_URL="https://cdn.fastly.steamstatic.com/client/installer/steam.deb"
+DEB_PATH="${WORK_DIR}/steam.deb"
+echo "  -> Downloading ${STEAM_URL}..."
+curl -fsSL "${STEAM_URL}" -o "${DEB_PATH}"
+
+DEB_EXTRACT="${WORK_DIR}/deb"
+mkdir -p "${DEB_EXTRACT}"
+(cd "${DEB_EXTRACT}" && ar x "${DEB_PATH}")
+DATA_TAR="$(find "${DEB_EXTRACT}" -maxdepth 1 -name 'data.tar.*' | head -n 1)"
+if [ -z "${DATA_TAR}" ]; then
+    echo "ERROR: No data.tar.* found in steam.deb" >&2
+    exit 1
+fi
+echo "  -> Extracting ${DATA_TAR}..."
+tar -xf "${DATA_TAR}" -C "${STAGE_DIR}"
+
+rm -rf "${STAGE_DIR}/etc/apt" "${STAGE_DIR}/usr/share/doc"
+
+# Bundle GNU CLI tools & ldconfig expected by /usr/lib/steam/bin_steam.sh and Steam Runtime
+copy_with_deps() {
+    local bin="$1"
+    local dst="$2"
+    mkdir -p "$(dirname "${dst}")"
+    cp -L "${bin}" "${dst}"
+    chmod 0755 "${dst}"
+    ldd "${bin}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+        [ -f "${lib}" ] || continue
+        case "$(basename "${lib}")" in
+            ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
+        esac
+        local ldst="${STAGE_DIR}${lib}"
+        mkdir -p "$(dirname "${ldst}")"
+        [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
+    done
+}
+
+mkdir -p "${STAGE_DIR}/usr/bin" "${STAGE_DIR}/sbin" "${STAGE_DIR}/usr/sbin"
+
+for tool in grep sed gawk find xargs tar xz gzip curl ps file; do
+    BIN_PATH="$(command -v "${tool}" || true)"
+    if [ -n "${BIN_PATH}" ] && [ -x "${BIN_PATH}" ]; then
+        copy_with_deps "${BIN_PATH}" "${STAGE_DIR}/usr/bin/${tool}"
+    else
+        echo "ERROR: Missing required tool '${tool}' on build host" >&2
+        exit 1
+    fi
+done
+
+ln -sf gawk "${STAGE_DIR}/usr/bin/awk"
+
+for wrap in egrep fgrep; do
+    cat > "${STAGE_DIR}/usr/bin/${wrap}" <<EOF
+#!/bin/sh
+exec /usr/bin/grep -${wrap%grep} "\$@"
+EOF
+    chmod 0755 "${STAGE_DIR}/usr/bin/${wrap}"
+done
+
+if [ -f /usr/share/misc/magic.mgc ]; then
+    mkdir -p "${STAGE_DIR}/usr/share/misc"
+    cp -L /usr/share/misc/magic.mgc "${STAGE_DIR}/usr/share/misc/magic.mgc"
+fi
+
+LDCONFIG_BIN="$(command -v ldconfig || echo /sbin/ldconfig)"
+if [ -x "${LDCONFIG_BIN}" ]; then
+    cp -L "${LDCONFIG_BIN}" "${STAGE_DIR}/sbin/ldconfig"
+    chmod 0755 "${STAGE_DIR}/sbin/ldconfig"
+    ln -sf /sbin/ldconfig "${STAGE_DIR}/usr/sbin/ldconfig"
+fi
+
+# Ensure steam.desktop Exec points to our wrapper
+if [ -f "${STAGE_DIR}/usr/share/applications/steam.desktop" ]; then
+    sed -i 's|^Exec=.*|Exec=/usr/bin/steam %U|' "${STAGE_DIR}/usr/share/applications/steam.desktop"
+fi
+"""
+
+[install.scripts]
+"usr/bin/which" = """#!/bin/sh
+status=0
+for arg in "$@"; do
+    case "$arg" in
+        -*) continue ;;
+    esac
+    command -v "$arg" || status=1
+done
+exit "$status"
+"""
+
+"usr/bin/lsb_release" = """#!/bin/sh
+case "${1:-}" in
+    -i|--id) echo "Serenity" ;;
+    -r|--release) echo "0.1.0" ;;
+    -c|--codename) echo "serenity" ;;
+    -d|--description) echo "Serenity Linux 0.1.0" ;;
+    -s|--short) echo "Serenity" ;;
+    *)
+        echo "Distributor ID:	Serenity"
+        echo "Description:	Serenity Linux 0.1.0"
+        echo "Release:	0.1.0"
+        echo "Codename:	serenity"
+        ;;
+esac
+"""
+
+"usr/bin/steam" = """#!/bin/sh
+export PATH="/usr/bin:/bin:/sbin:/usr/sbin:${PATH}"
+
+if [ -x /sbin/ldconfig ] && [ ! -e /etc/ld.so.cache ]; then
+    /sbin/ldconfig 2>/dev/null || true
+fi
+
+if [ -z "${DISPLAY:-}" ]; then
+    echo "[steam] WARN: DISPLAY is not set (Xwayland socket not active yet under cosmic-comp)." >&2
+fi
+
+if [ -x /usr/lib/steam/bin_steam.sh ]; then
+    exec /usr/lib/steam/bin_steam.sh "$@"
+fi
+
+echo "ERROR: /usr/lib/steam/bin_steam.sh not found" >&2
+exit 1
+"""
