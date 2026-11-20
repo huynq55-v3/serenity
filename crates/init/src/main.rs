@@ -252,6 +252,17 @@ fn handle_multicall_applet() -> bool {
             }
             true
         }
+        "suspend" => {
+            println!("[serenity] Syncing filesystems and entering sleep (suspend-to-RAM)...");
+            unsafe { libc::sync(); }
+            if let Err(e) = fs::write("/sys/power/state", "mem")
+                .or_else(|_| fs::write("/sys/power/state", "freeze"))
+            {
+                eprintln!("[serenity] suspend failed: {}", e);
+                std::process::exit(1);
+            }
+            true
+        }
         "cosmic-osd" => {
             let action = std::env::args().nth(1).unwrap_or_default();
             match action.as_str() {
@@ -267,6 +278,11 @@ fn handle_multicall_applet() -> bool {
                         libc::kill(1, libc::SIGUSR1);
                     }
                 },
+                "suspend" => {
+                    unsafe { libc::sync(); }
+                    let _ = fs::write("/sys/power/state", "mem")
+                        .or_else(|_| fs::write("/sys/power/state", "freeze"));
+                }
                 "log-out" => {
                     let _ = Command::new("/bin/kill")
                         .args(["-TERM", "-1"])
@@ -528,6 +544,22 @@ fn setup_desktop_permissions() {
                 udev_data.push_str("E:ID_INPUT_MOUSE=1\n");
             }
             let _ = fs::write(format!("/run/udev/data/c{}", dev_num), udev_data);
+        }
+    }
+
+    // Tag network interfaces (/sys/class/net/*) in /run/udev/data/n<ifindex> with NM_UNMANAGED=0
+    // so NetworkManager marks wlan0 / eth0 as managed without running systemd-udevd.
+    if let Ok(entries) = fs::read_dir("/sys/class/net") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else { continue };
+            if name_str == "lo" {
+                continue;
+            }
+            let Ok(ifindex) = fs::read_to_string(entry.path().join("ifindex")) else { continue };
+            let ifindex = ifindex.trim();
+            let udev_data = format!("E:NM_UNMANAGED=0\nE:ID_NET_NAME={}\n", name_str);
+            let _ = fs::write(format!("/run/udev/data/n{}", ifindex), udev_data);
         }
     }
 

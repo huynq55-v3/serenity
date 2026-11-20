@@ -38,7 +38,10 @@ impl Login1Manager {
 
     async fn suspend(&self, _interactive: bool) -> fdo::Result<()> {
         eprintln!("[serenity-sysd] login1.Manager.Suspend requested");
-        let _ = fs::write("/sys/power/state", "mem");
+        unsafe { libc::sync(); }
+        fs::write("/sys/power/state", "mem")
+            .or_else(|_| fs::write("/sys/power/state", "freeze"))
+            .map_err(|e| fdo::Error::Failed(format!("failed to enter sleep state: {}", e)))?;
         Ok(())
     }
 
