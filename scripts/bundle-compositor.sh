@@ -85,48 +85,18 @@ for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
     fi
 done
 
-# Bundle GLVND EGL vendor config (50_mesa.json) so libEGL discovers libEGL_mesa.so.0
-if [ -d /usr/share/glvnd/egl_vendor.d ]; then
-    mkdir -p "${TARGET_ROOT}/usr/share/glvnd"
-    cp -a /usr/share/glvnd/egl_vendor.d "${TARGET_ROOT}/usr/share/glvnd/"
-fi
-
 # Ensure /lib64 dynamic linker exists
 if [ -e /lib64/ld-linux-x86-64.so.2 ]; then
     mkdir -p "${TARGET_ROOT}/lib64"
     cp -nL /lib64/ld-linux-x86-64.so.2 "${TARGET_ROOT}/lib64/"
 fi
 
-# Bundle XKB keymaps (dereferencing /usr/share/X11/xkb -> ../xkeyboard-config-2) & locale
-if [ -d /usr/share/X11/xkb ]; then
-    mkdir -p "${TARGET_ROOT}/usr/share/X11"
-    rm -rf "${TARGET_ROOT}/usr/share/X11/xkb"
-    cp -aL /usr/share/X11/xkb "${TARGET_ROOT}/usr/share/X11/xkb"
-fi
-if [ -d /usr/share/X11/locale ]; then
-    mkdir -p "${TARGET_ROOT}/usr/share/X11"
-    cp -aL /usr/share/X11/locale "${TARGET_ROOT}/usr/share/X11/locale"
-fi
-
-# Bundle D-Bus session daemon so COSMIC Desktop (`cosmic-session`) works without systemd
+# Bundle D-Bus session daemon binaries (config /usr/share/dbus-1/session.conf lives in rootfs/overlay)
 for dbus_bin in /usr/bin/dbus-daemon /usr/bin/dbus-run-session; do
     if [ -x "${dbus_bin}" ]; then
         install -m 0755 "${dbus_bin}" "${TARGET_ROOT}/usr/bin/$(basename "${dbus_bin}")"
         copy_lib_and_deps "${dbus_bin}"
     fi
 done
-if [ -d /usr/share/dbus-1 ]; then
-    mkdir -p "${TARGET_ROOT}/usr/share/dbus-1/session.d" "${TARGET_ROOT}/usr/share/dbus-1/services"
-    cp -aL /usr/share/dbus-1/session.conf "${TARGET_ROOT}/usr/share/dbus-1/session.conf" 2>/dev/null || true
-fi
 
-# Bundle Fontconfig + DejaVu fonts so Alacritty & all Wayland GUI apps render crisp text
-if [ -d /etc/fonts ]; then
-    cp -aL /etc/fonts "${TARGET_ROOT}/etc/" 2>/dev/null || true
-fi
-if [ -d /usr/share/fonts/truetype/dejavu ]; then
-    mkdir -p "${TARGET_ROOT}/usr/share/fonts/truetype"
-    cp -aL /usr/share/fonts/truetype/dejavu "${TARGET_ROOT}/usr/share/fonts/truetype/"
-fi
-
-echo "[bundle-compositor] Done! Inside Serenity, run 'start-desktop' to launch Smithay as UID 1000."
+echo "[bundle-compositor] Done! Inside Serenity, run 'start-desktop' to launch Desktop as UID 1000."

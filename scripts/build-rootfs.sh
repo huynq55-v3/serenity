@@ -23,14 +23,9 @@ done
 rm -rf "${STAGE_DIR}"
 mkdir -p "${STAGE_DIR}"/{bin,usr/bin,usr/local/bin,usr/share/applications,usr/share/icons/hicolor/scalable/apps,sbin,etc,proc,sys,dev,tmp,run,root,home/serenity,var/db/spkg}
 
-# Copy static overlay files (/etc/os-release, /etc/hosts, /etc/resolv.conf, nushell config...)
+# Copy static overlay files (includes /etc/os-release, /etc/hosts, /etc/resolv.conf,
+# TLS CA certs, Fontconfig, D-Bus session.conf, GLVND 50_mesa.json, XKB, locale, and DejaVu fonts)
 cp -a "${ROOT_DIR}/rootfs/overlay/." "${STAGE_DIR}/"
-
-# Bundle public TLS root CA certificates so HTTPS clients (nu http, curl, spkg) work out of the box
-if [ -r /etc/ssl/certs/ca-certificates.crt ]; then
-    mkdir -p "${STAGE_DIR}/etc/ssl/certs"
-    cp /etc/ssl/certs/ca-certificates.crt "${STAGE_DIR}/etc/ssl/certs/ca-certificates.crt"
-fi
 
 # Install PID 1 + poweroff/reboot/start-desktop multicall symlinks
 install -m 0755 "${INIT_BIN}" "${STAGE_DIR}/init"
