@@ -1,3 +1,5 @@
+mod drm_backend;
+mod input;
 mod state;
 
 use std::process::Command;
@@ -5,10 +7,6 @@ use std::time::Duration;
 
 use smithay::{
     backend::{
-        input::{
-            AbsolutePositionEvent, Axis, ButtonState, Event, InputEvent, KeyboardKeyEvent,
-            PointerAxisEvent, PointerButtonEvent,
-        },
         renderer::{
             Color32F, damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement,
             gles::GlesRenderer,
@@ -16,16 +14,14 @@ use smithay::{
         winit::{self, WinitEvent},
     },
     desktop::space::render_output,
-    input::{
-        keyboard::FilterResult,
-        pointer::{AxisFrame, ButtonEvent, MotionEvent},
-    },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{calloop::EventLoop, wayland_server::Display},
-    utils::{SERIAL_COUNTER, Transform},
+    utils::Transform,
 };
-use state::SerenityState;
 use tracing::{error, info};
+
+use input::handle_input;
+use state::SerenityState;
 
 fn enforce_non_root(allow_root: bool) {
     let euid = unsafe { libc::geteuid() };
@@ -39,25 +35,7 @@ fn enforce_non_root(allow_root: bool) {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "serenity_compositor=info,smithay=warn".into()),
-        )
-        .init();
-
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let allow_root = args.iter().any(|a| a == "--allow-root");
-    enforce_non_root(allow_root);
-
-    // Optional initial client command passed after `--` (e.g. `serenity-compositor -- foot`)
-    let client_cmd: Vec<String> = args
-        .iter()
-        .position(|a| a == "--")
-        .map(|idx| args[idx + 1..].to_vec())
-        .unwrap_or_default();
-
+fn run_winit(client_cmd: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop: EventLoop<SerenityState> = EventLoop::try_new()?;
     let display: Display<SerenityState> = Display::new()?;
     let mut state = SerenityState::new(&event_loop.handle(), event_loop.get_signal(), display)?;
@@ -86,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let socket_str = state.socket_name.to_string_lossy().into_owned();
     info!(
-        "Serenity Wayland Compositor (Smithay 0.7) listening on WAYLAND_DISPLAY={}",
+        "Serenity Wayland Compositor (Winit nested) listening on WAYLAND_DISPLAY={}",
         socket_str
     );
     println!("WAYLAND_DISPLAY={}", socket_str);
@@ -101,7 +79,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Serenity dark slate background
     let bg_color = Color32F::new(0.07, 0.09, 0.14, 1.0);
 
     event_loop
@@ -164,96 +141,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn handle_input(
-    state: &mut SerenityState,
-    event: InputEvent<winit::WinitInput>,
-    output: &Output,
-) {
-    match event {
-        InputEvent::Keyboard { event } => {
-            let serial = SERIAL_COUNTER.next_serial();
-            let time = Event::time_msec(&event);
-            if let Some(keyboard) = state.seat.get_keyboard() {
-                keyboard.input::<(), _>(
-                    state,
-                    event.key_code(),
-                    event.state(),
-                    serial,
-                    time,
-                    |_, _, _| FilterResult::Forward,
-                );
-            }
-        }
-        InputEvent::PointerMotionAbsolute { event } => {
-            let output_geo = state.space.output_geometry(output).unwrap_or_default();
-            let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
-            state.pointer_location = pos;
-            let serial = SERIAL_COUNTER.next_serial();
-            let under = state.surface_under(pos);
-            if let Some(pointer) = state.seat.get_pointer() {
-                pointer.motion(
-                    state,
-                    under,
-                    &MotionEvent {
-                        location: pos,
-                        serial,
-                        time: event.time_msec(),
-                    },
-                );
-                pointer.frame(state);
-            }
-        }
-        InputEvent::PointerButton { event } => {
-            let serial = SERIAL_COUNTER.next_serial();
-            let button = event.button_code();
-            let button_state = event.state();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "serenity_compositor=info,smithay=warn".into()),
+        )
+        .init();
 
-            if button_state == ButtonState::Pressed {
-                let under = state.space.element_under(state.pointer_location).map(|(w, _)| w.clone());
-                if let Some(window) = under {
-                    state.space.raise_element(&window, true);
-                    if let Some(toplevel) = window.toplevel() {
-                        if let Some(kb) = state.seat.get_keyboard() {
-                            kb.set_focus(state, Some(toplevel.wl_surface().clone()), serial);
-                        }
-                    }
-                }
-            }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let allow_root = args.iter().any(|a| a == "--allow-root");
+    let force_drm = args.iter().any(|a| a == "--drm");
+    let force_winit = args.iter().any(|a| a == "--winit");
+    enforce_non_root(allow_root);
 
-            if let Some(pointer) = state.seat.get_pointer() {
-                pointer.button(
-                    state,
-                    &ButtonEvent {
-                        button,
-                        state: button_state,
-                        serial,
-                        time: event.time_msec(),
-                    },
-                );
-                pointer.frame(state);
-            }
-        }
-        InputEvent::PointerAxis { event } => {
-            let source = event.source();
-            let horizontal = event
-                .amount(Axis::Horizontal)
-                .unwrap_or_else(|| event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * 15.0 / 120.0);
-            let vertical = event
-                .amount(Axis::Vertical)
-                .unwrap_or_else(|| event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.0);
+    let client_cmd: Vec<String> = args
+        .iter()
+        .position(|a| a == "--")
+        .map(|idx| args[idx + 1..].to_vec())
+        .unwrap_or_default();
 
-            let mut frame = AxisFrame::new(event.time_msec()).source(source);
-            if horizontal != 0.0 {
-                frame = frame.value(Axis::Horizontal, horizontal);
-            }
-            if vertical != 0.0 {
-                frame = frame.value(Axis::Vertical, vertical);
-            }
-            if let Some(pointer) = state.seat.get_pointer() {
-                pointer.axis(state, frame);
-                pointer.frame(state);
-            }
-        }
-        _ => {}
+    let has_host_display =
+        std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
+
+    if force_drm || (!force_winit && !has_host_display) {
+        info!("Starting Serenity Compositor in bare-metal DRM/KMS + libinput mode");
+        drm_backend::run(&client_cmd)
+    } else {
+        info!("Starting Serenity Compositor in nested Winit mode");
+        run_winit(&client_cmd)
     }
 }

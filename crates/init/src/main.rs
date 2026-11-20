@@ -195,29 +195,87 @@ fn reap_zombies() {
     }
 }
 
-fn handle_power_applet() -> bool {
+fn handle_multicall_applet() -> bool {
     let argv0 = std::env::args().next().unwrap_or_default();
     let name = Path::new(&argv0)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
 
-    let cmd = match name {
-        "poweroff" | "halt" => libc::LINUX_REBOOT_CMD_POWER_OFF,
-        "reboot" => libc::LINUX_REBOOT_CMD_RESTART,
-        _ => return false,
-    };
-
-    println!("[serenity] Syncing filesystems and executing {}...", name);
-    unsafe {
-        libc::sync();
-        libc::reboot(cmd);
+    match name {
+        "poweroff" | "halt" => {
+            println!("[serenity] Syncing filesystems and executing {}...", name);
+            unsafe {
+                libc::sync();
+                libc::reboot(libc::LINUX_REBOOT_CMD_POWER_OFF);
+            }
+            true
+        }
+        "reboot" => {
+            println!("[serenity] Syncing filesystems and executing reboot...");
+            unsafe {
+                libc::sync();
+                libc::reboot(libc::LINUX_REBOOT_CMD_RESTART);
+            }
+            true
+        }
+        "start-desktop" => {
+            println!("[serenity] Dropping privileges to user 'serenity' (UID 1000) and launching Smithay...");
+            let groups: [libc::gid_t; 4] = [1000, 44, 104, 107]; // serenity, video, input, render
+            unsafe {
+                if libc::setgroups(groups.len(), groups.as_ptr()) != 0 {
+                    eprintln!("[serenity] setgroups failed: {}", io::Error::last_os_error());
+                    std::process::exit(1);
+                }
+                if libc::setgid(1000) != 0 || libc::setuid(1000) != 0 {
+                    eprintln!("[serenity] failed to drop root privileges: {}", io::Error::last_os_error());
+                    std::process::exit(1);
+                }
+                std::env::set_var("HOME", "/home/serenity");
+                std::env::set_var("USER", "serenity");
+                std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+            }
+            let extra_args: Vec<String> = std::env::args().skip(1).collect();
+            let err = Command::new("/usr/bin/serenity-compositor")
+                .args(&extra_args)
+                .current_dir("/home/serenity")
+                .exec();
+            eprintln!("[serenity] failed to exec /usr/bin/serenity-compositor: {}", err);
+            std::process::exit(1);
+        }
+        _ => false,
     }
-    true
+}
+
+fn setup_desktop_permissions() {
+    // Prepare non-root user directories (/home/serenity and XDG_RUNTIME_DIR=/run/user/1000)
+    // and grant group access on /dev/dri/* (video=44) and /dev/input/* (input=104)
+    // so Smithay compositor runs as regular user UID 1000 instead of root.
+    let _ = fs::create_dir_all("/home/serenity");
+    let _ = fs::create_dir_all("/run/user/1000");
+    unsafe {
+        for dir in [b"/home/serenity\0".as_ptr(), b"/run/user/1000\0".as_ptr()] {
+            libc::chown(dir as *const libc::c_char, 1000, 1000);
+        }
+        libc::chmod(b"/run/user/1000\0".as_ptr() as *const libc::c_char, 0o700);
+    }
+
+    for (dir_path, gid) in [("/dev/dri", 44u32), ("/dev/input", 104u32)] {
+        if let Ok(entries) = fs::read_dir(dir_path) {
+            for entry in entries.flatten() {
+                if let Ok(c_path) = CString::new(entry.path().to_string_lossy().as_bytes()) {
+                    unsafe {
+                        libc::chown(c_path.as_ptr(), 0, gid);
+                        libc::chmod(c_path.as_ptr(), 0o660);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn main() {
-    if handle_power_applet() {
+    if handle_multicall_applet() {
         return;
     }
 
@@ -231,6 +289,7 @@ fn main() {
         // Brief settle time for Wi-Fi / DRM device nodes after module load.
         thread::sleep(Duration::from_millis(400));
     }
+    setup_desktop_permissions();
     let net_status = net::setup_network();
 
     print_banner(net_status.as_deref(), kmods_loaded);

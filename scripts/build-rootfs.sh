@@ -32,11 +32,12 @@ if [ -r /etc/ssl/certs/ca-certificates.crt ]; then
     cp /etc/ssl/certs/ca-certificates.crt "${STAGE_DIR}/etc/ssl/certs/ca-certificates.crt"
 fi
 
-# Install PID 1 + poweroff/reboot multicall symlinks
+# Install PID 1 + poweroff/reboot/start-desktop multicall symlinks
 install -m 0755 "${INIT_BIN}" "${STAGE_DIR}/init"
 ln -sf /init "${STAGE_DIR}/sbin/poweroff"
 ln -sf /init "${STAGE_DIR}/sbin/reboot"
 ln -sf /init "${STAGE_DIR}/sbin/halt"
+ln -sf /init "${STAGE_DIR}/usr/bin/start-desktop"
 
 # Install Nushell, spkg & uutils/coreutils
 install -m 0755 "${NU_BIN}" "${STAGE_DIR}/bin/nu"

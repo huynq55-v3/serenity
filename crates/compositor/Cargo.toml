@@ -2,7 +2,7 @@
 name = "serenity-compositor"
 version = "0.1.0"
 edition = "2021"
-description = "Serenity Linux Wayland Compositor powered by Smithay"
+description = "Serenity Linux Wayland Compositor powered by Smithay (Winit + DRM/KMS)"
 
 [[bin]]
 name = "serenity-compositor"
@@ -11,6 +11,10 @@ path = "src/main.rs"
 [dependencies]
 libc = "0.2"
 smithay = { version = "0.7", default-features = false, features = [
+    "backend_drm",
+    "backend_egl",
+    "backend_gbm",
+    "backend_libinput",
     "backend_winit",
     "renderer_gl",
     "wayland_frontend",
