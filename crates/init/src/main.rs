@@ -160,14 +160,22 @@ fn spawn_shell() -> io::Result<Child> {
                     if fd > 2 {
                         libc::close(fd);
                     }
-                    libc::ioctl(0, libc::TIOCSCTTY, 0);
+                    // Arg 1 = force-acquire controlling TTY as root so /dev/tty works in Nushell.
+                    libc::ioctl(0, libc::TIOCSCTTY, 1);
+                    let pid = libc::getpid();
+                    libc::tcsetpgrp(0, pid);
                     let mut ws: libc::winsize = std::mem::zeroed();
                     if libc::ioctl(0, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col == 0 {
                         ws.ws_row = 24;
                         ws.ws_col = 80;
                         libc::ioctl(0, libc::TIOCSWINSZ, &ws);
                     }
-                    break;
+                    // Verify /dev/tty is actually bound; otherwise try the next candidate.
+                    let check_tty = libc::open(b"/dev/tty\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
+                    if check_tty >= 0 {
+                        libc::close(check_tty);
+                        break;
+                    }
                 }
             }
             Ok(())
