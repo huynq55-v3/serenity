@@ -8,8 +8,35 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command};
 use std::ptr;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::thread;
 use std::time::Duration;
+
+static PENDING_POWER_ACTION: AtomicI32 = AtomicI32::new(0);
+
+extern "C" fn power_signal_handler(sig: libc::c_int) {
+    PENDING_POWER_ACTION.store(sig, Ordering::SeqCst);
+}
+
+fn check_pending_power_action() {
+    match PENDING_POWER_ACTION.load(Ordering::SeqCst) {
+        libc::SIGUSR2 => {
+            println!("\n[init] Powering off Serenity Linux...");
+            unsafe {
+                libc::sync();
+                libc::reboot(libc::LINUX_REBOOT_CMD_POWER_OFF);
+            }
+        }
+        libc::SIGINT | libc::SIGUSR1 => {
+            println!("\n[init] Rebooting Serenity Linux...");
+            unsafe {
+                libc::sync();
+                libc::reboot(libc::LINUX_REBOOT_CMD_RESTART);
+            }
+        }
+        _ => {}
+    }
+}
 
 const HOSTNAME: &str = "serenity";
 const PRIMARY_SHELL: &str = "/bin/nu";
@@ -207,7 +234,10 @@ fn handle_multicall_applet() -> bool {
             println!("[serenity] Syncing filesystems and executing {}...", name);
             unsafe {
                 libc::sync();
-                libc::reboot(libc::LINUX_REBOOT_CMD_POWER_OFF);
+                if libc::reboot(libc::LINUX_REBOOT_CMD_POWER_OFF) != 0 {
+                    // Non-root user (UID 1000 inside Alacritty/COSMIC): ask PID 1 to power off
+                    libc::kill(1, libc::SIGUSR2);
+                }
             }
             true
         }
@@ -215,7 +245,34 @@ fn handle_multicall_applet() -> bool {
             println!("[serenity] Syncing filesystems and executing reboot...");
             unsafe {
                 libc::sync();
-                libc::reboot(libc::LINUX_REBOOT_CMD_RESTART);
+                if libc::reboot(libc::LINUX_REBOOT_CMD_RESTART) != 0 {
+                    // Non-root user (UID 1000 inside Alacritty/COSMIC): ask PID 1 to reboot
+                    libc::kill(1, libc::SIGUSR1);
+                }
+            }
+            true
+        }
+        "cosmic-osd" => {
+            let action = std::env::args().nth(1).unwrap_or_default();
+            match action.as_str() {
+                "shutdown" => unsafe {
+                    libc::sync();
+                    if libc::reboot(libc::LINUX_REBOOT_CMD_POWER_OFF) != 0 {
+                        libc::kill(1, libc::SIGUSR2);
+                    }
+                },
+                "restart" => unsafe {
+                    libc::sync();
+                    if libc::reboot(libc::LINUX_REBOOT_CMD_RESTART) != 0 {
+                        libc::kill(1, libc::SIGUSR1);
+                    }
+                },
+                "log-out" => {
+                    let _ = Command::new("/bin/kill")
+                        .args(["-TERM", "-1"])
+                        .status();
+                }
+                _ => {}
             }
             true
         }
@@ -412,6 +469,19 @@ fn main() {
         return;
     }
 
+    unsafe {
+        // Install signal handlers on PID 1 for SIGUSR1 (reboot), SIGUSR2 (poweroff),
+        // and SIGINT (Ctrl+Alt+Del from kernel when reboot(CAD_OFF) is set).
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = power_signal_handler as *const () as usize;
+        libc::sigemptyset(&mut sa.sa_mask);
+        sa.sa_flags = 0; // Do not SA_RESTART so waitpid wakes up immediately with EINTR
+        libc::sigaction(libc::SIGUSR1, &sa, ptr::null_mut());
+        libc::sigaction(libc::SIGUSR2, &sa, ptr::null_mut());
+        libc::sigaction(libc::SIGINT, &sa, ptr::null_mut());
+        libc::reboot(libc::LINUX_REBOOT_CMD_CAD_OFF);
+    }
+
     setup_filesystems();
     setup_hostname();
     setup_environment();
@@ -429,12 +499,15 @@ fn main() {
 
     // PID 1 must never exit; exiting causes a Linux kernel panic.
     loop {
+        check_pending_power_action();
         match spawn_shell() {
             Ok(mut child) => {
                 let shell_pid = child.id() as libc::pid_t;
                 loop {
+                    check_pending_power_action();
                     let mut status: libc::c_int = 0;
                     let waited = unsafe { libc::waitpid(-1, &mut status, 0) };
+                    check_pending_power_action();
                     if waited == shell_pid {
                         let _ = child.try_wait();
                         break;
@@ -448,6 +521,7 @@ fn main() {
                     }
                     reap_zombies();
                 }
+                check_pending_power_action();
                 println!("\n[init] Shell exited. Respawning in 1s (run 'poweroff' to shut down cleanly)...");
                 thread::sleep(Duration::from_secs(1));
             }

@@ -96,66 +96,63 @@ if [ -x "${ROOT_DIR}/target/release/serenity-compositor" ]; then
 fi
 
 mkdir -p "${MNT}/boot"
+echo "[install] Copying host kernel + initrd (for NVMe/USB-HID/DRM/Wi-Fi drivers on bare metal)..."
+cp -L "${HOST_KERNEL}" "${MNT}/boot/vmlinuz-serenity"
 USE_INITRD=0
-if [ -r "${CUSTOM_KERNEL}" ]; then
-    echo "[install] Using custom Serenity kernel: ${CUSTOM_KERNEL}"
-    cp -L "${CUSTOM_KERNEL}" "${MNT}/boot/vmlinuz-serenity"
-else
-    echo "[install] Using host kernel + initrd (for NVMe/USB-HID drivers on bare metal)..."
-    cp -L "${HOST_KERNEL}" "${MNT}/boot/vmlinuz-serenity"
-    if [ -r "${HOST_INITRD}" ]; then
-        cp -L "${HOST_INITRD}" "${MNT}/boot/initrd-serenity.img"
-        USE_INITRD=1
-    fi
-
-    # Bundle hardware kernel modules (decompressed .ko) + Intel firmware for bare-metal Wi-Fi, GPU & touchpad
-    KVER="$(readlink -f "${HOST_KERNEL}" | sed -E 's|^.*/vmlinuz-||')"
-    echo "[install] Bundling bare-metal drivers for kernel ${KVER} (iwlwifi, iwlmvm, i915, hid)..."
-    MOD_OUT="${MNT}/lib/modules/serenity"
-    MOD_LIST="${MNT}/etc/serenity/modules.load"
-    mkdir -p "${MOD_OUT}" "${MNT}/etc/serenity" "${MNT}/lib/firmware"
-    : > "${MOD_LIST}"
-
-    declare -A SEEN_MODS=()
-    TARGET_MODS=(iwlwifi iwlmvm i915 usbhid hid_generic hid_multitouch i2c_hid_acpi)
-    for mod in "${TARGET_MODS[@]}"; do
-        while read -r kind modpath _; do
-            [ "${kind}" = "insmod" ] || continue
-            [ -f "${modpath}" ] || continue
-            base="$(basename "${modpath}")"
-            base_ko="${base%.zst}"
-            base_ko="${base_ko%.xz}"
-            base_ko="${base_ko%.gz}"
-            if [ -n "${SEEN_MODS[${base_ko}]:-}" ]; then
-                continue
-            fi
-            SEEN_MODS["${base_ko}"]=1
-            dest_ko="${MOD_OUT}/${base_ko}"
-            case "${modpath}" in
-                *.ko.zst) zstd -dq -c "${modpath}" > "${dest_ko}" ;;
-                *.ko.xz)  xz -dc "${modpath}" > "${dest_ko}" ;;
-                *.ko.gz)  gzip -dc "${modpath}" > "${dest_ko}" ;;
-                *.ko)     cp "${modpath}" "${dest_ko}" ;;
-            esac
-            echo "/lib/modules/serenity/${base_ko}" >> "${MOD_LIST}"
-        done < <(modprobe -S "${KVER}" --show-depends "${mod}" 2>/dev/null || true)
-    done
-    echo "[install] Bundled $(wc -l < "${MOD_LIST}") kernel module(s) into /lib/modules/serenity."
-
-    echo "[install] Copying Intel Wi-Fi & GPU firmware into /lib/firmware..."
-    if [ -d /lib/firmware/i915 ]; then
-        cp -a /lib/firmware/i915 "${MNT}/lib/firmware/"
-    fi
-    if [ -d /lib/firmware/intel/iwlwifi ]; then
-        mkdir -p "${MNT}/lib/firmware/intel"
-        cp -a /lib/firmware/intel/iwlwifi "${MNT}/lib/firmware/intel/"
-    fi
-    cp -a /lib/firmware/iwlwifi* "${MNT}/lib/firmware/" 2>/dev/null || true
-    cp -a /lib/firmware/regulatory.db* "${MNT}/lib/firmware/" 2>/dev/null || true
+if [ -r "${HOST_INITRD}" ]; then
+    cp -L "${HOST_INITRD}" "${MNT}/boot/initrd-serenity.img"
+    USE_INITRD=1
 fi
 
-# Ensure root ownership
+# Bundle hardware kernel modules (decompressed .ko) + Intel firmware for bare-metal Wi-Fi, GPU & touchpad
+KVER="$(readlink -f "${HOST_KERNEL}" | sed -E 's|^.*/vmlinuz-||')"
+echo "[install] Bundling bare-metal drivers for kernel ${KVER} (iwlwifi, iwlmvm, i915, hid, psmouse)..."
+MOD_OUT="${MNT}/lib/modules/serenity"
+MOD_LIST="${MNT}/etc/serenity/modules.load"
+mkdir -p "${MOD_OUT}" "${MNT}/etc/serenity" "${MNT}/lib/firmware"
+: > "${MOD_LIST}"
+
+declare -A SEEN_MODS=()
+TARGET_MODS=(iwlwifi iwlmvm i915 usbhid hid_generic hid_multitouch i2c_hid_acpi psmouse)
+for mod in "${TARGET_MODS[@]}"; do
+    while read -r kind modpath _; do
+        [ "${kind}" = "insmod" ] || continue
+        [ -f "${modpath}" ] || continue
+        base="$(basename "${modpath}")"
+        base_ko="${base%.zst}"
+        base_ko="${base_ko%.xz}"
+        base_ko="${base_ko%.gz}"
+        if [ -n "${SEEN_MODS[${base_ko}]:-}" ]; then
+            continue
+        fi
+        SEEN_MODS["${base_ko}"]=1
+        dest_ko="${MOD_OUT}/${base_ko}"
+        case "${modpath}" in
+            *.ko.zst) zstd -dq -c "${modpath}" > "${dest_ko}" ;;
+            *.ko.xz)  xz -dc "${modpath}" > "${dest_ko}" ;;
+            *.ko.gz)  gzip -dc "${modpath}" > "${dest_ko}" ;;
+            *.ko)     cp "${modpath}" "${dest_ko}" ;;
+        esac
+        echo "/lib/modules/serenity/${base_ko}" >> "${MOD_LIST}"
+    done < <(modprobe -S "${KVER}" --show-depends "${mod}" 2>/dev/null || true)
+done
+echo "[install] Bundled $(wc -l < "${MOD_LIST}") kernel module(s) into /lib/modules/serenity."
+
+echo "[install] Copying Intel Wi-Fi & GPU firmware into /lib/firmware..."
+if [ -d /lib/firmware/i915 ]; then
+    cp -a /lib/firmware/i915 "${MNT}/lib/firmware/"
+fi
+if [ -d /lib/firmware/intel/iwlwifi ]; then
+    mkdir -p "${MNT}/lib/firmware/intel"
+    cp -a /lib/firmware/intel/iwlwifi "${MNT}/lib/firmware/intel/"
+fi
+cp -a /lib/firmware/iwlwifi* "${MNT}/lib/firmware/" 2>/dev/null || true
+cp -a /lib/firmware/regulatory.db* "${MNT}/lib/firmware/" 2>/dev/null || true
+
+# Ensure root ownership and setuid bit on /init so non-root UID 1000 can invoke poweroff/reboot/cosmic-osd
 chown -R 0:0 "${MNT}"
+chmod 4755 "${MNT}/init"
+chown -R 1000:1000 "${MNT}/home/serenity" 2>/dev/null || true
 sync
 
 GRUB_ENTRY=$(cat <<EOF

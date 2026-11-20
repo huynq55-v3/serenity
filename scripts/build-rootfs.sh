@@ -27,11 +27,14 @@ mkdir -p "${STAGE_DIR}"/{bin,usr/bin,usr/local/bin,usr/share/applications,usr/sh
 # TLS CA certs, Fontconfig, D-Bus session.conf, GLVND 50_mesa.json, XKB, locale, and DejaVu fonts)
 cp -a "${ROOT_DIR}/rootfs/overlay/." "${STAGE_DIR}/"
 
-# Install PID 1 + poweroff/reboot/start-desktop multicall symlinks
-install -m 0755 "${INIT_BIN}" "${STAGE_DIR}/init"
+# Install PID 1 (setuid root so non-root UID 1000 in Alacritty/COSMIC can invoke poweroff/reboot/cosmic-osd)
+install -m 4755 "${INIT_BIN}" "${STAGE_DIR}/init"
 ln -sf /init "${STAGE_DIR}/sbin/poweroff"
 ln -sf /init "${STAGE_DIR}/sbin/reboot"
 ln -sf /init "${STAGE_DIR}/sbin/halt"
+ln -sf /init "${STAGE_DIR}/usr/bin/poweroff"
+ln -sf /init "${STAGE_DIR}/usr/bin/reboot"
+ln -sf /init "${STAGE_DIR}/usr/bin/cosmic-osd"
 ln -sf /init "${STAGE_DIR}/usr/bin/start-desktop"
 
 # Install Nushell, spkg & uutils/coreutils
