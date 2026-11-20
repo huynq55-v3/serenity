@@ -27,8 +27,10 @@ mkdir -p "${STAGE_DIR}"/{bin,usr/bin,usr/local/bin,usr/share/applications,usr/sh
 # TLS CA certs, Fontconfig, D-Bus session.conf, GLVND 50_mesa.json, XKB, locale, and DejaVu fonts)
 cp -a "${ROOT_DIR}/rootfs/overlay/." "${STAGE_DIR}/"
 
-# Install PID 1 (setuid root so non-root UID 1000 in Alacritty/COSMIC can invoke poweroff/reboot/cosmic-osd)
-install -m 4755 "${INIT_BIN}" "${STAGE_DIR}/init"
+# Install PID 1 + poweroff/reboot/cosmic-osd/start-desktop multicall symlinks
+# Note: keep 0755 during rootless staging so mke2fs -d (owned by UID 1000) never
+# creates a setuid-1000 /init! Use -E root_owner=0:0 and setuid via debugfs/chmod.
+install -m 0755 "${INIT_BIN}" "${STAGE_DIR}/init"
 ln -sf /init "${STAGE_DIR}/sbin/poweroff"
 ln -sf /init "${STAGE_DIR}/sbin/reboot"
 ln -sf /init "${STAGE_DIR}/sbin/halt"
@@ -65,5 +67,6 @@ if [ "${MODE}" = "disk" ] || [ "${MODE}" = "all" ]; then
     rm -f "${OUT_DISK}"
     truncate -s "${DISK_SIZE_MB}M" "${OUT_DISK}"
     /usr/sbin/mke2fs -q -t ext4 -d "${STAGE_DIR}" -L SERENITY -F "${OUT_DISK}"
+    printf 'sif init uid 0\nsif init gid 0\nsif init mode 0104755\n' | /usr/sbin/debugfs -w "${OUT_DISK}" >/dev/null 2>&1
     echo "[rootfs] Built persistent ext4 disk: ${OUT_DISK} (${DISK_SIZE_MB}M)"
 fi

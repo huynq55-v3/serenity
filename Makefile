@@ -109,6 +109,7 @@ disk-gui: desktop-release
 	@rm -f $(DISK_GUI)
 	@truncate -s 2048M $(DISK_GUI)
 	@/usr/sbin/mke2fs -q -t ext4 -d $(BUILD_DIR)/rootfs-stage -L SERENITY -F $(DISK_GUI)
+	@printf 'sif init uid 0\nsif init gid 0\nsif init mode 0104755\n' | /usr/sbin/debugfs -w $(DISK_GUI) >/dev/null 2>&1
 	@echo "[rootfs] Built GUI ext4 disk: $(DISK_GUI) (2048M)"
 
 initramfs: init spkg nushell coreutils
