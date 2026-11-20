@@ -14,4 +14,4 @@ package = "cosmic-panel-bin"
 files = { "cosmic-panel" = "usr/bin/cosmic-panel" }
 
 [install.assets]
-"cosmic-panel-bin/data/default_schema" = "usr/share/cosmic"
+"data/default_schema" = "usr/share/cosmic"
