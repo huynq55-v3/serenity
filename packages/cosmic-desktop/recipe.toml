@@ -1,6 +1,6 @@
 [package]
 name = "cosmic-desktop"
-version = "0.1.0"
+version = "0.1.1"
 arch = "any"
 description = "Serenity COSMIC Desktop meta-package (Smithay + Dock + Applets + Notifications + Launcher + App Library)"
 deps = [
@@ -23,4 +23,28 @@ type = "meta"
 "usr/share/cosmic/com.system76.CosmicAppList/v1/favorites" = """[
     "com.system76.CosmicAppLibrary",
 ]
+"""
+
+# Exclude CosmicPanelWorkspacesButton until cosmic-workspaces is packaged so cosmic-panel-button doesn't panic/dump core
+"usr/share/cosmic/com.system76.CosmicPanel.Panel/v1/plugins_wings" = """Some((["com.system76.CosmicPanelAppButton"],["com.system76.CosmicAppletInputSources","com.system76.CosmicAppletA11y", "com.system76.CosmicAppletStatusArea", "com.system76.CosmicAppletTiling", "com.system76.CosmicAppletAudio", "com.system76.CosmicAppletBluetooth", "com.system76.CosmicAppletNetwork", "com.system76.CosmicAppletBattery", "com.system76.CosmicAppletNotifications", "com.system76.CosmicAppletPower"]))
+"""
+
+"usr/share/cosmic/com.system76.CosmicPanel.Dock/v1/plugins_center" = """Some(["com.system76.CosmicPanelLauncherButton", "com.system76.CosmicPanelAppButton", "com.system76.CosmicAppList", "com.system76.CosmicAppletMinimize"])
+"""
+
+"usr/share/applications/com.system76.CosmicAppletAudio.desktop" = """[Desktop Entry]
+Name=Audio
+Comment=Manage audio volume and devices
+Type=Application
+Exec=cosmic-applet-audio
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Audio;
+Icon=com.system76.CosmicAppletAudio-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicShrinkable=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=10
 """

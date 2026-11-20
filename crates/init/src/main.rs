@@ -339,6 +339,7 @@ fn handle_multicall_applet() -> bool {
             if Path::new("/usr/bin/cosmic-applets").exists() {
                 for applet in [
                     "cosmic-app-list",
+                    "cosmic-applet-audio",
                     "cosmic-applet-battery",
                     "cosmic-applet-time",
                     "cosmic-applet-power",
@@ -452,9 +453,13 @@ fn handle_multicall_applet() -> bool {
                 }
             }
 
+            setup_desktop_permissions();
+
             println!("[serenity] Dropping privileges to user 'serenity' (UID 1000)...");
             let groups: [libc::gid_t; 5] = [1000, 29, 44, 104, 107]; // serenity, audio, video, input, render
             unsafe {
+                let rl = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                libc::setrlimit(libc::RLIMIT_CORE, &rl);
                 if libc::setgroups(groups.len(), groups.as_ptr()) != 0 {
                     eprintln!("[serenity] setgroups failed: {}", io::Error::last_os_error());
                     std::process::exit(1);
@@ -583,23 +588,28 @@ fn setup_desktop_permissions() {
         }
     }
 
-    // Tag ALSA control devices in /run/udev/data/c<major>:<minor> so PipeWire/WirePlumber
-    // discovers sound cards via libudev without running systemd-udevd.
+    // Tag ALSA card & control devices in /run/udev/data so PipeWire/WirePlumber
+    // (spa/alsa-udev checks SOUND_INITIALIZED=1) discovers sound cards without systemd-udevd.
     let _ = fs::create_dir_all("/run/udev/data");
     if let Ok(entries) = fs::read_dir("/sys/class/sound") {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let Some(name_str) = name.to_str() else { continue };
-            if !name_str.starts_with("controlC") {
-                continue;
-            }
-            if let Ok(dev_num) = fs::read_to_string(entry.path().join("dev")) {
-                let dev_num = dev_num.trim();
+            if name_str.starts_with("card") {
                 let udev_data = format!(
-                    "E:ID_SEAT=seat0\nE:ID_FOR_SEAT=sound-{}\nG:seat\n",
+                    "E:SOUND_INITIALIZED=1\nE:ID_SEAT=seat0\nE:ID_FOR_SEAT=sound-{}\nG:seat\n",
                     name_str
                 );
-                let _ = fs::write(format!("/run/udev/data/c{}", dev_num), udev_data);
+                let _ = fs::write(format!("/run/udev/data/+sound:{}", name_str), udev_data);
+            } else if name_str.starts_with("controlC") {
+                if let Ok(dev_num) = fs::read_to_string(entry.path().join("dev")) {
+                    let dev_num = dev_num.trim();
+                    let udev_data = format!(
+                        "E:SOUND_INITIALIZED=1\nE:ID_SEAT=seat0\nE:ID_FOR_SEAT=sound-{}\nG:seat\n",
+                        name_str
+                    );
+                    let _ = fs::write(format!("/run/udev/data/c{}", dev_num), udev_data);
+                }
             }
         }
     }
@@ -697,6 +707,10 @@ fn main() {
     }
 
     unsafe {
+        // Disable core dumps system-wide so crashing processes don't litter ~/core.*
+        let rl = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        libc::setrlimit(libc::RLIMIT_CORE, &rl);
+
         // Install signal handlers on PID 1 for SIGUSR1 (reboot), SIGUSR2 (poweroff),
         // and SIGINT (Ctrl+Alt+Del from kernel when reboot(CAD_OFF) is set).
         let mut sa: libc::sigaction = std::mem::zeroed();

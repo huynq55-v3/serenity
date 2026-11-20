@@ -126,8 +126,10 @@ TARGET_MODS=(
     snd snd_pcm snd_rawmidi
     snd_hda_intel snd_hda_codec_realtek snd_hda_codec_alc269 snd_hda_codec_alc662 snd_hda_codec_alc882
     snd_hda_codec_conexant snd_hda_codec_cirrus snd_hda_codec_cs8409
+    snd_hda_codec_intelhdmi snd_hda_codec_nvhdmi snd_hda_codec_atihdmi
     snd_hda_codec_generic snd_hda_codec_hdmi
     snd_sof_pci_intel_tgl snd_sof_pci_intel_adl snd_sof_pci_intel_mtl snd_sof_pci_intel_cnl
+    snd_soc_skl_hda_dsp snd_soc_dmic snd_soc_hdac_hdmi snd_soc_sof_sdw
     snd_usb_audio
 )
 for mod in "${TARGET_MODS[@]}"; do
