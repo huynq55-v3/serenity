@@ -9,6 +9,8 @@ Supported source types:
   - prebuilt  : downloads an upstream musl tarball and repacks selected files
   - cargo     : clones a Rust repo and builds static x86_64-unknown-linux-musl
   - cargo-gnu : clones a Rust GUI/Wayland repo (e.g. COSMIC, Alacritty) and builds native x86_64-gnu
+  - deb       : downloads an upstream .deb package, extracts data.tar.*, and repacks into .tar.zst
+  - syslibs   : collects common C/C++ shared libraries from the build host (e.g. clibrary for Chrome)
   - meta      : dependency-only / config-only meta-package (e.g. cosmic-desktop)
 """
 import argparse
@@ -66,6 +68,98 @@ def install_assets_and_inline(recipe: dict, src_dir: Path | None, stage_dir: Pat
         dst_path = stage_dir / dst_rel.lstrip("/")
         dst_path.parent.mkdir(parents=True, exist_ok=True)
         dst_path.write_text(content, encoding="utf-8")
+
+    # Write executable inline scripts declared in [install.scripts]
+    for dst_rel, content in install_cfg.get("scripts", {}).items():
+        dst_path = stage_dir / dst_rel.lstrip("/")
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        dst_path.write_text(content, encoding="utf-8")
+        os.chmod(dst_path, 0o755)
+
+
+def stage_deb(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
+    """Download an upstream .deb archive, extract data.tar.*, and apply optional overrides."""
+    src = recipe["source"]
+    url = src["url"]
+    expected_sha = src.get("sha256", "").strip().lower()
+    deb_path = work_dir / Path(url).name
+    download(url, deb_path)
+
+    if expected_sha:
+        actual = sha256_file(deb_path)
+        if actual != expected_sha:
+            raise RuntimeError(
+                f"Source SHA-256 mismatch for {url}:\n  expected: {expected_sha}\n  actual  : {actual}"
+            )
+
+    deb_extract = work_dir / "deb"
+    deb_extract.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ar", "x", str(deb_path)], cwd=deb_extract, check=True)
+
+    data_tars = sorted(deb_extract.glob("data.tar.*"))
+    if not data_tars:
+        raise RuntimeError(f"No data.tar.* found inside {deb_path}")
+    data_tar = data_tars[0]
+    print(f"  -> Extracting {data_tar.name} into staging rootfs...")
+    subprocess.run(["tar", "-xf", str(data_tar), "-C", str(stage_dir)], check=True)
+
+    # Remove unneeded paths (e.g. cron/apt hooks) if specified
+    for rm_rel in recipe.get("install", {}).get("remove", []):
+        target = stage_dir / rm_rel.lstrip("/")
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        elif target.exists() or target.is_symlink():
+            target.unlink()
+
+    install_assets_and_inline(recipe, stage_dir, stage_dir)
+
+
+def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
+    """Collect common C/C++ shared libraries + transitive ldd deps into a portable spkg archive."""
+    src = recipe["source"]
+    patterns = src.get("patterns", [])
+    search_dirs = [Path("/usr/lib/x86_64-linux-gnu"), Path("/lib/x86_64-linux-gnu")]
+    seen: set[Path] = set()
+
+    def copy_one(p: Path) -> None:
+        if not p.exists() and not p.is_symlink():
+            return
+        if p in seen:
+            return
+        seen.add(p)
+        dst = stage_dir / str(p).lstrip("/")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if p.is_symlink():
+            target = os.readlink(p)
+            if dst.exists() or dst.is_symlink():
+                dst.unlink()
+            dst.symlink_to(target)
+            resolved = p.resolve()
+            if resolved.is_file():
+                copy_one(resolved)
+        elif p.is_file():
+            if not dst.exists():
+                shutil.copy2(p, dst)
+            # Recursively collect transitive shared library dependencies via ldd
+            proc = subprocess.run(["ldd", str(p)], capture_output=True, text=True)
+            for line in proc.stdout.splitlines():
+                for tok in line.split():
+                    if tok.startswith("/") and (tok.startswith("/usr/lib") or tok.startswith("/lib")):
+                        dep = Path(tok)
+                        if dep.exists():
+                            copy_one(dep)
+
+    matched = 0
+    for libdir in search_dirs:
+        if not libdir.is_dir():
+            continue
+        for pat in patterns:
+            for match in sorted(libdir.glob(pat)):
+                copy_one(match)
+                matched += 1
+
+    print(f"  -> Collected {len(seen)} shared library file(s)/symlink(s) from {matched} pattern matches.")
+    install_assets_and_inline(recipe, None, stage_dir)
 
 
 def stage_prebuilt(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
@@ -203,6 +297,10 @@ def build_recipe(recipe_path: Path, out_dir: Path, base_url: str) -> tuple[str, 
             stage_cargo(recipe, stage_dir, work_dir, musl=True)
         elif src_type == "cargo-gnu":
             stage_cargo(recipe, stage_dir, work_dir, musl=False)
+        elif src_type == "deb":
+            stage_deb(recipe, stage_dir, work_dir)
+        elif src_type == "syslibs":
+            stage_syslibs(recipe, stage_dir, work_dir)
         elif src_type == "meta":
             install_assets_and_inline(recipe, None, stage_dir)
         else:

@@ -1,0 +1,45 @@
+[package]
+name = "google-chrome"
+version = "stable"
+arch = "x86_64-gnu"
+description = "Google Chrome web browser (repacked from official .deb, Wayland native)"
+deps = ["clibrary"]
+
+[source]
+type = "deb"
+url = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+
+[install]
+# Strip Debian/Ubuntu apt & cron integration files not used on Serenity
+remove = [
+    "etc/cron.daily",
+    "usr/share/menu",
+    "usr/share/doc",
+    "usr/share/man",
+]
+
+[install.assets]
+"opt/google/chrome/product_logo_128.png" = "usr/share/icons/hicolor/128x128/apps/google-chrome.png"
+"opt/google/chrome/product_logo_256.png" = "usr/share/icons/hicolor/256x256/apps/google-chrome.png"
+
+[install.scripts]
+"usr/bin/google-chrome" = """#!/bin/nu
+def --wrapped main [...args] {
+    ^/opt/google/chrome/chrome --ozone-platform-hint=auto --ozone-platform=wayland --no-sandbox ...$args
+}
+"""
+
+[install.inline]
+"usr/share/applications/google-chrome.desktop" = """[Desktop Entry]
+Version=1.0
+Name=Google Chrome
+GenericName=Web Browser
+Comment=Access the Internet
+Exec=/opt/google/chrome/chrome --ozone-platform-hint=auto --ozone-platform=wayland --no-sandbox %U
+StartupNotify=true
+Terminal=false
+Icon=google-chrome
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml_xml;x-scheme-handler/http;x-scheme-handler/https;
+"""
