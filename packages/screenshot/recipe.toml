@@ -1,8 +1,8 @@
 [package]
 name = "screenshot"
-version = "1.0.0"
+version = "1.1.0"
 arch = "x86_64-gnu"
-description = "Wayland screenshot toolkit (grim + slurp + wl-clipboard + COSMIC wrapper)"
+description = "Wayland screenshot toolkit (grim with ext-image-copy-capture-v1 for COSMIC + slurp + wl-clipboard)"
 deps = []
 
 [source]
@@ -27,7 +27,23 @@ copy_with_deps() {
     done
 }
 
-for tool in grim slurp wl-copy wl-paste; do
+# Build latest wayland-protocols (pure XML) so grim compiles with ext-image-copy-capture-v1
+# support required by cosmic-comp (Ubuntu's packaged grim 1.4 only supports wlr-screencopy).
+echo "  -> Installing latest wayland-protocols into temporary prefix..."
+git clone --depth 1 https://gitlab.freedesktop.org/wayland/wayland-protocols.git "${WORK_DIR}/wayland-protocols"
+meson setup "${WORK_DIR}/wayland-protocols/build" "${WORK_DIR}/wayland-protocols" \
+    --prefix="${WORK_DIR}/wp-prefix" -Dtests=false
+ninja -C "${WORK_DIR}/wayland-protocols/build" install
+
+export PKG_CONFIG_PATH="${WORK_DIR}/wp-prefix/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+echo "  -> Building latest grim (with ext-image-copy-capture-v1 support)..."
+git clone --depth 1 https://gitlab.freedesktop.org/emersion/grim.git "${WORK_DIR}/grim"
+meson setup "${WORK_DIR}/grim/build" "${WORK_DIR}/grim" -Dman-pages=disabled
+ninja -C "${WORK_DIR}/grim/build"
+copy_with_deps "${WORK_DIR}/grim/build/grim" "${STAGE_DIR}/usr/bin/grim"
+
+for tool in slurp wl-copy wl-paste; do
     BIN_PATH="$(command -v "${tool}" || true)"
     if [ -n "${BIN_PATH}" ] && [ -x "${BIN_PATH}" ]; then
         copy_with_deps "${BIN_PATH}" "${STAGE_DIR}/usr/bin/${tool}"

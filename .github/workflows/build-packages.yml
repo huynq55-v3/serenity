@@ -117,7 +117,10 @@ jobs:
                 sudo apt-get install -y --no-install-recommends zstd clang lld
               elif [ "${{ matrix.package }}" = "screenshot" ]; then
                 sudo apt-get update
-                sudo apt-get install -y --no-install-recommends zstd grim slurp wl-clipboard
+                sudo apt-get install -y --no-install-recommends \
+                  zstd git gcc meson ninja-build pkg-config \
+                  libwayland-dev libpixman-1-dev libpng-dev libjpeg-dev \
+                  slurp wl-clipboard
               elif [ "${{ matrix.package }}" = "pipewire" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends \
