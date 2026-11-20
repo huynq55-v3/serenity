@@ -253,6 +253,42 @@ fn handle_multicall_applet() -> bool {
             }
             true
         }
+        "sudo" => {
+            let mut args: Vec<String> = std::env::args().skip(1).collect();
+            // Support common flags like `sudo -E <cmd>` or `sudo -- <cmd>`
+            while let Some(first) = args.first() {
+                if first == "-E" || first == "-H" || first == "--" {
+                    let is_end = first == "--";
+                    args.remove(0);
+                    if is_end {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            if args.is_empty() {
+                eprintln!("Usage: sudo <command> [args...]");
+                std::process::exit(1);
+            }
+            let ruid = unsafe { libc::getuid() };
+            // Only allow root (0) or primary desktop user 'serenity' (1000)
+            if ruid != 0 && ruid != 1000 {
+                eprintln!("sudo: permission denied (uid {})", ruid);
+                std::process::exit(1);
+            }
+            unsafe {
+                if libc::setgid(0) != 0 || libc::setuid(0) != 0 {
+                    eprintln!("sudo: failed to escalate privileges: {}", io::Error::last_os_error());
+                    std::process::exit(1);
+                }
+                std::env::set_var("USER", "root");
+                std::env::set_var("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+            }
+            let err = Command::new(&args[0]).args(&args[1..]).exec();
+            eprintln!("sudo: {}: {}", args[0], err);
+            std::process::exit(127);
+        }
         "suspend" => {
             println!("[serenity] Syncing filesystems and entering sleep (suspend-to-RAM)...");
             unsafe { libc::sync(); }
