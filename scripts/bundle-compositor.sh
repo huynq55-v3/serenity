@@ -57,6 +57,7 @@ done
 for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
     [ -d "${libdir}" ] || continue
     for pat in \
+        "libdl.so*" "libpthread.so*" "librt.so*" "libresolv.so*" "libnss_files.so*" "libnss_dns.so*" \
         "libEGL*.so*" "libGLESv2*.so*" "libGLdispatch*.so*" "libgbm*.so*" "libgallium*.so*" "libLLVM*.so*" \
         "libwayland-*.so*" "libxkb*.so*" \
         "libdisplay-info*.so*" "libseat*.so*" "libpixman-1*.so*" "libdav1d*.so*" \
