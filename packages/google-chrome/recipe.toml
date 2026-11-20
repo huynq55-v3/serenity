@@ -1,6 +1,6 @@
 [package]
 name = "google-chrome"
-version = "stable"
+version = "stable-r2"
 arch = "x86_64-gnu"
 description = "Google Chrome web browser (repacked from official .deb, Wayland native)"
 deps = ["clibrary"]
@@ -23,10 +23,18 @@ remove = [
 "opt/google/chrome/product_logo_256.png" = "usr/share/icons/hicolor/256x256/apps/google-chrome.png"
 
 [install.scripts]
-"usr/bin/google-chrome" = """#!/bin/nu
-def --wrapped main [...args] {
-    ^/opt/google/chrome/chrome --ozone-platform-hint=auto --ozone-platform=wayland --no-sandbox ...$args
-}
+"usr/bin/google-chrome" = """#!/bin/sh
+EXTRA_FLAGS=""
+# Auto-disable GPU compositing only under virtual QEMU virtio-gpu (which lacks dmabuf create_immed);
+# bare-metal GPUs (Intel i915/iris, AMD, etc.) use full hardware acceleration.
+for drv in /sys/class/drm/card*/device/driver; do
+    if [ -L "$drv" ]; then
+        case "$(readlink "$drv")" in
+            *virtio*) EXTRA_FLAGS="--disable-gpu --disable-gpu-compositing" ;;
+        esac
+    fi
+done
+exec /opt/google/chrome/chrome --ozone-platform-hint=auto --ozone-platform=wayland --no-sandbox $EXTRA_FLAGS "$@"
 """
 
 [install.inline]
@@ -35,7 +43,7 @@ Version=1.0
 Name=Google Chrome
 GenericName=Web Browser
 Comment=Access the Internet
-Exec=/opt/google/chrome/chrome --ozone-platform-hint=auto --ozone-platform=wayland --no-sandbox %U
+Exec=/usr/bin/google-chrome %U
 StartupNotify=true
 Terminal=false
 Icon=google-chrome
