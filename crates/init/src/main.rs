@@ -255,6 +255,9 @@ fn handle_multicall_applet() -> bool {
                 std::env::set_var("XDG_SESSION_TYPE", "wayland");
                 std::env::set_var("XDG_DATA_DIRS", "/usr/local/share:/usr/share");
                 std::env::set_var("XDG_CONFIG_DIRS", "/etc/xdg:/usr/share");
+                if Path::new("/run/seatd.sock").exists() {
+                    std::env::set_var("LIBSEAT_BACKEND", "seatd");
+                }
             }
             let extra_args: Vec<String> = std::env::args().skip(1).collect();
             let err = if !extra_args.is_empty() {

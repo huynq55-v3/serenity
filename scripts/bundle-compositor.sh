@@ -96,7 +96,7 @@ if [ -e /lib64/ld-linux-x86-64.so.2 ]; then
 fi
 
 # Bundle D-Bus session daemon & seatd (so non-root COSMIC Desktop works without systemd)
-for sys_bin in /usr/bin/dbus-daemon /usr/bin/dbus-run-session /usr/bin/seatd; do
+for sys_bin in /usr/bin/dbus-daemon /usr/bin/dbus-run-session /usr/sbin/seatd /usr/bin/seatd; do
     if [ -x "${sys_bin}" ]; then
         install -m 0755 "${sys_bin}" "${TARGET_ROOT}/usr/bin/$(basename "${sys_bin}")"
         copy_lib_and_deps "${sys_bin}"
