@@ -55,6 +55,7 @@ for applet in $("${COREUTILS_BIN}" --list); do
     ln -sf coreutils "${STAGE_DIR}/bin/${applet}"
     applet_count=$((applet_count + 1))
 done
+ln -sf /bin/env "${STAGE_DIR}/usr/bin/env"
 echo "[rootfs] Staged /init, /bin/nu, and ${applet_count} uutils/coreutils applets."
 
 if [ "${MODE}" = "initramfs" ] || [ "${MODE}" = "all" ]; then

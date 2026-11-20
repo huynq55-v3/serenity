@@ -1,6 +1,6 @@
 [package]
 name = "steam"
-version = "1.0.1"
+version = "1.0.2"
 arch = "x86_64-gnu"
 description = "Steam gaming client (official deb + Xwayland + lib32 + GNU runtime utilities)"
 deps = ["clibrary", "pipewire", "xwayland", "lib32", "bash"]
@@ -59,6 +59,7 @@ for tool in grep sed gawk find xargs tar xz gzip curl ps file; do
 done
 
 ln -sf gawk "${STAGE_DIR}/usr/bin/awk"
+ln -sf /bin/env "${STAGE_DIR}/usr/bin/env"
 
 cat > "${STAGE_DIR}/usr/bin/egrep" <<'EOF'
 #!/bin/sh
