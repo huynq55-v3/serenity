@@ -101,6 +101,47 @@ else
         cp -L "${HOST_INITRD}" "${MNT}/boot/initrd-serenity.img"
         USE_INITRD=1
     fi
+
+    # Bundle hardware kernel modules (decompressed .ko) + Intel firmware for bare-metal Wi-Fi, GPU & touchpad
+    KVER="$(readlink -f "${HOST_KERNEL}" | sed -E 's|^.*/vmlinuz-||')"
+    echo "[install] Bundling bare-metal drivers for kernel ${KVER} (iwlwifi, iwlmvm, i915, hid)..."
+    MOD_OUT="${MNT}/lib/modules/serenity"
+    MOD_LIST="${MNT}/etc/serenity/modules.load"
+    mkdir -p "${MOD_OUT}" "${MNT}/etc/serenity" "${MNT}/lib/firmware"
+    : > "${MOD_LIST}"
+
+    declare -A SEEN_MODS=()
+    TARGET_MODS=(iwlwifi iwlmvm i915 usbhid hid_generic hid_multitouch i2c_hid_acpi)
+    for mod in "${TARGET_MODS[@]}"; do
+        while read -r kind modpath _; do
+            [ "${kind}" = "insmod" ] || continue
+            [ -f "${modpath}" ] || continue
+            base="$(basename "${modpath}")"
+            base_ko="${base%.zst}"
+            base_ko="${base_ko%.xz}"
+            base_ko="${base_ko%.gz}"
+            if [ -n "${SEEN_MODS[${base_ko}]:-}" ]; then
+                continue
+            fi
+            SEEN_MODS["${base_ko}"]=1
+            dest_ko="${MOD_OUT}/${base_ko}"
+            case "${modpath}" in
+                *.ko.zst) zstd -dq -c "${modpath}" > "${dest_ko}" ;;
+                *.ko.xz)  xz -dc "${modpath}" > "${dest_ko}" ;;
+                *.ko.gz)  gzip -dc "${modpath}" > "${dest_ko}" ;;
+                *.ko)     cp "${modpath}" "${dest_ko}" ;;
+            esac
+            echo "/lib/modules/serenity/${base_ko}" >> "${MOD_LIST}"
+        done < <(modprobe -S "${KVER}" --show-depends "${mod}" 2>/dev/null || true)
+    done
+    echo "[install] Bundled $(wc -l < "${MOD_LIST}") kernel module(s) into /lib/modules/serenity."
+
+    echo "[install] Copying Intel Wi-Fi & GPU firmware into /lib/firmware..."
+    if [ -d /lib/firmware/i915 ]; then
+        cp -a /lib/firmware/i915 "${MNT}/lib/firmware/"
+    fi
+    cp -a /lib/firmware/iwlwifi* "${MNT}/lib/firmware/" 2>/dev/null || true
+    cp -a /lib/firmware/regulatory.db* "${MNT}/lib/firmware/" 2>/dev/null || true
 fi
 
 # Ensure root ownership

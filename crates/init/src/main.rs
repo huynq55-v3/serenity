@@ -1,3 +1,4 @@
+mod kmod;
 mod net;
 
 use std::ffi::CString;
@@ -75,7 +76,7 @@ fn setup_environment() {
     }
 }
 
-fn print_banner(net_status: Option<&str>) {
+fn print_banner(net_status: Option<&str>, kmods_loaded: usize) {
     let kernel = fs::read_to_string("/proc/sys/kernel/osrelease")
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
@@ -86,13 +87,19 @@ fn print_banner(net_status: Option<&str>) {
         .unwrap_or_else(|| "?".to_string());
 
     let net_line = net_status.unwrap_or("offline (no NIC)");
+    let gpu_line = if Path::new("/dev/dri/card0").exists() {
+        "/dev/dri/card0 (DRM/KMS ready)"
+    } else {
+        "console only (no DRM card0)"
+    };
 
     println!();
     println!("====================================================");
     println!("   Serenity Linux 0.1.0 (x86_64-musl + Rust PID 1)");
     println!("   Kernel : Linux {}", kernel);
-    println!("   Boot   : {}s | Shell: {}", uptime, PRIMARY_SHELL);
+    println!("   Boot   : {}s | Shell: {} | KMods: {}", uptime, PRIMARY_SHELL, kmods_loaded);
     println!("   Net    : {}", net_line);
+    println!("   GPU    : {}", gpu_line);
     println!("====================================================");
     println!();
 }
@@ -201,9 +208,14 @@ fn main() {
     setup_environment();
 
     let _ = fs::create_dir_all("/root");
+    let kmods_loaded = kmod::load_kernel_modules();
+    if kmods_loaded > 0 {
+        // Brief settle time for Wi-Fi / DRM device nodes after module load.
+        thread::sleep(Duration::from_millis(400));
+    }
     let net_status = net::setup_network();
 
-    print_banner(net_status.as_deref());
+    print_banner(net_status.as_deref(), kmods_loaded);
 
     // PID 1 must never exit; exiting causes a Linux kernel panic.
     loop {

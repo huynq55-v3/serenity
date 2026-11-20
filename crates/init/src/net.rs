@@ -119,8 +119,13 @@ fn find_primary_nic() -> Option<String> {
     names.into_iter().next()
 }
 
-/// Configures loopback (`lo`) and brings up the primary NIC with QEMU SLIRP static IPv4
-/// (`10.0.2.15/24`, gateway `10.0.2.2`) so HTTPS/DNS work immediately without an external DHCP client.
+fn is_wireless(iface: &str) -> bool {
+    std::path::Path::new(&format!("/sys/class/net/{}/wireless", iface)).exists()
+}
+
+/// Configures loopback (`lo`) and detects the primary NIC:
+/// - Wired NIC (e.g. QEMU `eth0`): configures static QEMU SLIRP IPv4 (`10.0.2.15/24`, gw `10.0.2.2`).
+/// - Wireless NIC (e.g. bare-metal `wlan0`): brings interface UP and reports Wi-Fi ready.
 pub fn setup_network() -> Option<String> {
     let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
     if sock < 0 {
@@ -133,22 +138,32 @@ pub fn setup_network() -> Option<String> {
     let _ = set_ipv4_ioctl(sock, "lo", SIOCSIFNETMASK, Ipv4Addr::new(255, 0, 0, 0));
     let _ = bring_interface_up(sock, "lo");
 
-    // 2. Configure primary NIC (e.g. eth0 / ens3)
+    // 2. Configure primary NIC (wired or Wi-Fi)
     let result = if let Some(nic) = find_primary_nic() {
-        let ip = Ipv4Addr::new(10, 0, 2, 15);
-        let mask = Ipv4Addr::new(255, 255, 255, 0);
-        let gw = Ipv4Addr::new(10, 0, 2, 2);
+        if is_wireless(&nic) {
+            match bring_interface_up(sock, &nic) {
+                Ok(()) => Some(format!("{} (Wi-Fi ready, awaiting WPA auth)", nic)),
+                Err(e) => {
+                    eprintln!("[init] warn: failed to bring up {}: {}", nic, e);
+                    Some(format!("{} (Wi-Fi detected)", nic))
+                }
+            }
+        } else {
+            let ip = Ipv4Addr::new(10, 0, 2, 15);
+            let mask = Ipv4Addr::new(255, 255, 255, 0);
+            let gw = Ipv4Addr::new(10, 0, 2, 2);
 
-        let res = set_ipv4_ioctl(sock, &nic, SIOCSIFADDR, ip)
-            .and_then(|_| set_ipv4_ioctl(sock, &nic, SIOCSIFNETMASK, mask))
-            .and_then(|_| bring_interface_up(sock, &nic))
-            .and_then(|_| add_default_route(sock, &nic, gw));
+            let res = set_ipv4_ioctl(sock, &nic, SIOCSIFADDR, ip)
+                .and_then(|_| set_ipv4_ioctl(sock, &nic, SIOCSIFNETMASK, mask))
+                .and_then(|_| bring_interface_up(sock, &nic))
+                .and_then(|_| add_default_route(sock, &nic, gw));
 
-        match res {
-            Ok(()) => Some(format!("{} (10.0.2.15/24 via 10.0.2.2)", nic)),
-            Err(e) => {
-                eprintln!("[init] warn: failed to configure {}: {}", nic, e);
-                None
+            match res {
+                Ok(()) => Some(format!("{} (10.0.2.15/24 via 10.0.2.2)", nic)),
+                Err(e) => {
+                    eprintln!("[init] warn: failed to configure {}: {}", nic, e);
+                    None
+                }
             }
         }
     } else {
