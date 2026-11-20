@@ -108,6 +108,18 @@ if [ -d /usr/share/X11/locale ]; then
     cp -aL /usr/share/X11/locale "${TARGET_ROOT}/usr/share/X11/locale"
 fi
 
+# Bundle D-Bus session daemon so COSMIC Desktop (`cosmic-session`) works without systemd
+for dbus_bin in /usr/bin/dbus-daemon /usr/bin/dbus-run-session; do
+    if [ -x "${dbus_bin}" ]; then
+        install -m 0755 "${dbus_bin}" "${TARGET_ROOT}/usr/bin/$(basename "${dbus_bin}")"
+        copy_lib_and_deps "${dbus_bin}"
+    fi
+done
+if [ -d /usr/share/dbus-1 ]; then
+    mkdir -p "${TARGET_ROOT}/usr/share/dbus-1/session.d" "${TARGET_ROOT}/usr/share/dbus-1/services"
+    cp -aL /usr/share/dbus-1/session.conf "${TARGET_ROOT}/usr/share/dbus-1/session.conf" 2>/dev/null || true
+fi
+
 # Bundle Fontconfig + DejaVu fonts so Alacritty & all Wayland GUI apps render crisp text
 if [ -d /etc/fonts ]; then
     cp -aL /etc/fonts "${TARGET_ROOT}/etc/" 2>/dev/null || true

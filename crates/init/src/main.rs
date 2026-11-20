@@ -246,20 +246,22 @@ fn handle_multicall_applet() -> bool {
                     .exec()
             } else if Path::new("/usr/bin/cosmic-session").exists() {
                 println!("[serenity] Launching COSMIC Desktop (cosmic-session)...");
+                let bus_addr = "unix:path=/run/user/1000/bus";
                 unsafe {
                     std::env::set_var("XDG_CURRENT_DESKTOP", "COSMIC");
                     std::env::set_var("XDG_SESSION_DESKTOP", "COSMIC");
+                    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", bus_addr);
                 }
-                if Path::new("/usr/bin/dbus-run-session").exists() {
-                    Command::new("/usr/bin/dbus-run-session")
-                        .arg("/usr/bin/cosmic-session")
-                        .current_dir("/home/serenity")
-                        .exec()
-                } else {
-                    Command::new("/usr/bin/cosmic-session")
-                        .current_dir("/home/serenity")
-                        .exec()
+                // Start D-Bus session bus at /run/user/1000/bus if not already running
+                let _ = fs::remove_file("/run/user/1000/bus");
+                if Path::new("/usr/bin/dbus-daemon").exists() {
+                    let _ = Command::new("/usr/bin/dbus-daemon")
+                        .args(["--session", &format!("--address={}", bus_addr), "--fork"])
+                        .status();
                 }
+                Command::new("/usr/bin/cosmic-session")
+                    .current_dir("/home/serenity")
+                    .exec()
             } else if Path::new("/usr/bin/cosmic-comp").exists() {
                 println!("[serenity] Launching COSMIC Compositor (cosmic-comp)...");
                 unsafe {
