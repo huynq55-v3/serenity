@@ -1,6 +1,6 @@
 [package]
 name = "git"
-version = "2.48.0"
+version = "2.48.1"
 arch = "x86_64-gnu"
 description = "Distributed version control system (with HTTPS clone/push support)"
 deps = []
@@ -18,6 +18,9 @@ copy_with_deps() {
     chmod 0755 "${dst}"
     ldd "${bin}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
         [ -f "${lib}" ] || continue
+        case "$(basename "${lib}")" in
+            ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
+        esac
         local ldst="${STAGE_DIR}${lib}"
         mkdir -p "$(dirname "${ldst}")"
         [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"

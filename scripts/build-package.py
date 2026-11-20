@@ -122,8 +122,22 @@ def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
     search_dirs = [Path("/usr/lib/x86_64-linux-gnu"), Path("/lib/x86_64-linux-gnu")]
     seen: set[Path] = set()
 
+    # Never package core glibc / dynamic loader into app or syslibs packages:
+    # the Serenity base rootfs already ships matching ld-linux + libc/libm/libpthread/libdl/librt.
+    # Overwriting them with a different Ubuntu runner's glibc or symlink breaks ELF exec!
+    skip_prefixes = (
+        "ld-linux-",
+        "libc.so",
+        "libm.so",
+        "libdl.so",
+        "libpthread.so",
+        "librt.so",
+    )
+
     def copy_one(p: Path) -> None:
         if not p.exists() and not p.is_symlink():
+            return
+        if p.name.startswith(skip_prefixes):
             return
         if p in seen:
             return

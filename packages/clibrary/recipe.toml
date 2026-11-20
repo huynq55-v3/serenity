@@ -1,6 +1,6 @@
 [package]
 name = "clibrary"
-version = "1.0.0"
+version = "1.0.1"
 arch = "x86_64-gnu"
 description = "Common Linux C/C++ runtime libraries (NSS, NSPR, Cairo, Pango, ATK, X11, ALSA, CUPS, Kerberos, GLib) for Google Chrome & desktop apps"
 deps = []
