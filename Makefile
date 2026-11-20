@@ -132,7 +132,6 @@ run-gui: disk-gui
 	@test -r "$(KERNEL)" || (echo "ERROR: Kernel not found/readable at $(KERNEL)." && exit 1)
 	$(QEMU) \
 		$(QEMU_ACCEL) \
-		-bios /usr/share/OVMF/OVMF_CODE_4M.fd \
 		-kernel "$(KERNEL)" \
 		-drive "file=$(DISK_GUI),format=raw,if=virtio" \
 		-m 1024M \
