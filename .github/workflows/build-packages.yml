@@ -9,6 +9,8 @@ on:
       - ".github/workflows/build-packages.yml"
   workflow_dispatch:
 
+# Parallel matrix factory for Serenity Linux packages (spkg)
+
 permissions:
   contents: write
 
