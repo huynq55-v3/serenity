@@ -1,8 +1,8 @@
 [package]
 name = "google-chrome"
-version = "stable-r2"
+version = "stable-r3"
 arch = "x86_64-gnu"
-description = "Google Chrome web browser (repacked from official .deb, Wayland native)"
+description = "Google Chrome web browser (repacked from official .deb, Wayland native + full sandbox)"
 deps = ["clibrary"]
 
 [source]
@@ -34,7 +34,7 @@ for drv in /sys/class/drm/card*/device/driver; do
         esac
     fi
 done
-exec /opt/google/chrome/chrome --ozone-platform-hint=auto --ozone-platform=wayland --no-sandbox $EXTRA_FLAGS "$@"
+exec /opt/google/chrome/chrome --ozone-platform-hint=auto --ozone-platform=wayland $EXTRA_FLAGS "$@"
 """
 
 [install.inline]
@@ -45,6 +45,7 @@ GenericName=Web Browser
 Comment=Access the Internet
 Exec=/usr/bin/google-chrome %U
 StartupNotify=true
+StartupWMClass=google-chrome
 Terminal=false
 Icon=google-chrome
 Type=Application
