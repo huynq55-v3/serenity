@@ -95,7 +95,7 @@ disk-gui: desktop-release
 	@mkdir -p $(BUILD_DIR)/rootfs-stage/lib/modules/serenity $(BUILD_DIR)/rootfs-stage/etc/serenity
 	@KVER=$$(uname -r); \
 	: > $(BUILD_DIR)/rootfs-stage/etc/serenity/modules.load; \
-	for m in virtio_gpu; do \
+	for m in virtio_gpu virtio_input psmouse; do \
 		modprobe -S "$$KVER" --show-depends "$$m" 2>/dev/null | awk '$$1=="insmod"{print $$2}' | while read -r p; do \
 			[ -f "$$p" ] || continue; \
 			base=$$(basename "$$p" .zst); \
@@ -135,8 +135,9 @@ run-gui: disk-gui
 		-kernel "$(KERNEL)" \
 		-drive "file=$(DISK_GUI),format=raw,if=virtio" \
 		-m 1024M \
-		-device virtio-vga-gl,xres=1280,yres=720 \
+		-device virtio-vga-gl,xres=1920,yres=1080 \
 		-device virtio-tablet-pci \
+		-device virtio-keyboard-pci \
 		-display gtk,gl=on \
 		-no-reboot \
 		-netdev user,id=net0 \

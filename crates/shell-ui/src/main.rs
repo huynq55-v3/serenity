@@ -302,11 +302,14 @@ impl SerenityShell {
     }
 }
 
+const DEJAVU_SANS: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
+
 fn main() -> iced::Result {
     iced::application(SerenityShell::title, SerenityShell::update, SerenityShell::view)
         .theme(|_| Theme::TokyoNight)
-        .default_font(Font::with_name("Fira Sans"))
+        .font(DEJAVU_SANS)
+        .default_font(Font::with_name("DejaVu Sans"))
         .decorations(false)
-        .window_size(Size::new(1280.0, 720.0))
+        .window_size(Size::new(1920.0, 1080.0))
         .run()
 }

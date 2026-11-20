@@ -272,6 +272,34 @@ fn setup_desktop_permissions() {
             }
         }
     }
+
+    // Populate minimal /run/udev/data/c<major>:<minor> tags so libinput recognizes
+    // keyboards, mice, touchpads, and QEMU virtio-tablet without running a full udevd daemon.
+    let _ = fs::create_dir_all("/run/udev/data");
+    if let Ok(entries) = fs::read_dir("/sys/class/input") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else { continue };
+            if !name_str.starts_with("event") {
+                continue;
+            }
+            let sys_base = entry.path();
+            let Ok(dev_num) = fs::read_to_string(sys_base.join("dev")) else { continue };
+            let dev_num = dev_num.trim();
+            let ev_hex = fs::read_to_string(sys_base.join("device/capabilities/ev"))
+                .unwrap_or_default();
+            let ev_bits = u64::from_str_radix(ev_hex.trim(), 16).unwrap_or(0);
+
+            let mut udev_data = String::from("E:ID_INPUT=1\n");
+            if (ev_bits & (1 << 1)) != 0 {
+                udev_data.push_str("E:ID_INPUT_KEY=1\nE:ID_INPUT_KEYBOARD=1\n");
+            }
+            if (ev_bits & (1 << 2)) != 0 || (ev_bits & (1 << 3)) != 0 {
+                udev_data.push_str("E:ID_INPUT_MOUSE=1\n");
+            }
+            let _ = fs::write(format!("/run/udev/data/c{}", dev_num), udev_data);
+        }
+    }
 }
 
 fn main() {
