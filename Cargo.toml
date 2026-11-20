@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/init",
     "crates/spkg",
+    "crates/compositor",
 ]
 
 [profile.release]

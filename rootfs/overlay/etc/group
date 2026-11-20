@@ -1,2 +1,6 @@
 root:x:0:
 tty:x:5:
+video:x:44:serenity
+input:x:104:serenity
+render:x:107:serenity
+serenity:x:1000:

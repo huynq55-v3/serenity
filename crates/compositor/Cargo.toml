@@ -1,0 +1,20 @@
+[package]
+name = "serenity-compositor"
+version = "0.1.0"
+edition = "2021"
+description = "Serenity Linux Wayland Compositor powered by Smithay"
+
+[[bin]]
+name = "serenity-compositor"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+smithay = { version = "0.7", default-features = false, features = [
+    "backend_winit",
+    "renderer_gl",
+    "wayland_frontend",
+    "desktop",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
