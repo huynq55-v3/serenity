@@ -355,11 +355,17 @@ fn handle_multicall_applet() -> bool {
                 && Path::new("/run/dbus/system_bus_socket").exists()
             {
                 let _ = fs::create_dir_all("/run/wpa_supplicant");
+                let wpa_log = fs::File::create("/tmp/wpa_supplicant.log")
+                    .map(std::process::Stdio::from)
+                    .unwrap_or_else(|_| std::process::Stdio::null());
+                let wpa_err = fs::File::create("/tmp/wpa_supplicant.log")
+                    .map(std::process::Stdio::from)
+                    .unwrap_or_else(|_| std::process::Stdio::null());
                 let _ = Command::new("/usr/bin/wpa_supplicant")
-                    .args(["-u", "-s", "-O", "/run/wpa_supplicant"])
+                    .args(["-u", "-O", "/run/wpa_supplicant"])
                     .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
+                    .stdout(wpa_log)
+                    .stderr(wpa_err)
                     .spawn();
             }
             if Path::new("/usr/bin/NetworkManager").exists()
@@ -373,11 +379,17 @@ fn handle_multicall_applet() -> bool {
                 if !Path::new("/etc/machine-id").exists() {
                     let _ = fs::write("/etc/machine-id", "5e7e1170a1b2c3d4e5f60718293a4b5c\n");
                 }
+                let nm_log = fs::File::create("/tmp/networkmanager.log")
+                    .map(std::process::Stdio::from)
+                    .unwrap_or_else(|_| std::process::Stdio::null());
+                let nm_err = fs::File::create("/tmp/networkmanager.log")
+                    .map(std::process::Stdio::from)
+                    .unwrap_or_else(|_| std::process::Stdio::null());
                 let _ = Command::new("/usr/bin/NetworkManager")
-                    .args(["--no-daemon"])
+                    .args(["--no-daemon", "--debug", "--log-level=INFO"])
                     .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
+                    .stdout(nm_log)
+                    .stderr(nm_err)
                     .spawn();
             }
 
