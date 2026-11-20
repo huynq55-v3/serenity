@@ -1,0 +1,12 @@
+[package]
+name = "serenity-init"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal PID 1 init process for Serenity Linux"
+
+[[bin]]
+name = "init"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"

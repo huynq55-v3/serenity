@@ -1,0 +1,18 @@
+[package]
+name = "spkg"
+version = "0.1.0"
+edition = "2021"
+description = "Serenity Linux static Rust package manager (GitHub Releases + .tar.zst/.tar.gz)"
+
+[[bin]]
+name = "spkg"
+path = "src/main.rs"
+
+[dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+ruzstd = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+ureq = { version = "2", default-features = false, features = ["tls"] }

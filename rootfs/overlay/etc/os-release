@@ -1,0 +1,5 @@
+NAME="Serenity Linux"
+VERSION="0.1.0"
+ID=serenity
+PRETTY_NAME="Serenity Linux 0.1.0 (Rust + musl)"
+HOME_URL="https://github.com/serenity-linux"

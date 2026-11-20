@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "packages": {
+    "ripgrep": {
+      "version": "15.2.0",
+      "arch": "x86_64-musl",
+      "description": "Fast regex line-oriented search tool written in Rust (rg)",
+      "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
+      "deps": [],
+      "extract_files": {
+        "rg": "/usr/bin/rg"
+      }
+    },
+    "fd": {
+      "version": "10.5.2",
+      "arch": "x86_64-musl",
+      "description": "Simple, fast and user-friendly alternative to find written in Rust",
+      "url": "https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "",
+      "deps": [],
+      "extract_files": {
+        "fd": "/usr/bin/fd"
+      }
+    }
+  }
+}

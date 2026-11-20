@@ -1,0 +1,9 @@
+/target
+/build
+*.img
+*.iso
+*.cpio
+*.cpio.gz
+*.tar.xz
+*.tar.gz
+*.tar.zst

@@ -1,0 +1,46 @@
+# Serenity Linux x86_64 Kernel Config Fragment
+# Applied on top of x86_64_defconfig via scripts/kconfig/merge_config.sh
+
+# Core boot & initramfs
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+CONFIG_PRINTK=y
+CONFIG_EARLY_PRINTK=y
+
+# Virtual filesystems
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_TMPFS=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_UNIX98_PTYS=y
+
+# Storage (ext4 + virtio-blk)
+CONFIG_EXT4_FS=y
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_CONSOLE=y
+
+# Networking (QEMU virtio-net + TCP/IP)
+CONFIG_NET=y
+CONFIG_INET=y
+CONFIG_UNIX=y
+CONFIG_PACKET=y
+CONFIG_VIRTIO_NET=y
+
+# Serial console (for QEMU -nographic)
+CONFIG_TTY=y
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+
+# Trim unnecessary heavy subsystems for faster builds
+# CONFIG_SOUND is not set
+# CONFIG_DRM is not set
+# CONFIG_WIRELESS is not set
+# CONFIG_WLAN is not set
+# CONFIG_BT is not set
+# CONFIG_DEBUG_INFO is not set

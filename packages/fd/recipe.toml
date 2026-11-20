@@ -1,0 +1,14 @@
+[package]
+name = "fd"
+version = "10.5.2"
+arch = "x86_64-musl"
+description = "Simple, fast and user-friendly alternative to find written in Rust"
+deps = []
+
+[source]
+type = "prebuilt"
+url = "https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-x86_64-unknown-linux-musl.tar.gz"
+sha256 = ""
+
+[install]
+files = { "fd" = "usr/bin/fd" }
