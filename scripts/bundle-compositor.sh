@@ -95,17 +95,24 @@ if [ -e /lib64/ld-linux-x86-64.so.2 ]; then
     cp -nL /lib64/ld-linux-x86-64.so.2 "${TARGET_ROOT}/lib64/"
 fi
 
-# Bundle D-Bus daemon, seatd, NetworkManager, wpa_supplicant, nmcli, cosmic-settings & cosmic-randr
+# Bundle D-Bus daemon, seatd, NetworkManager, wpa_supplicant, nmcli, cosmic-settings, cosmic-randr & pop-launcher
 for sys_bin in \
     /usr/bin/dbus-daemon /usr/bin/dbus-run-session \
     /usr/sbin/seatd /usr/bin/seatd \
     /usr/sbin/NetworkManager /usr/sbin/wpa_supplicant /usr/bin/nmcli \
-    /usr/bin/cosmic-settings /usr/bin/cosmic-randr; do
+    /usr/bin/cosmic-settings /usr/bin/cosmic-randr /usr/bin/pop-launcher; do
     if [ -x "${sys_bin}" ]; then
         install -m 0755 "${sys_bin}" "${TARGET_ROOT}/usr/bin/$(basename "${sys_bin}")"
         copy_lib_and_deps "${sys_bin}"
     fi
 done
+
+# Bundle pop-launcher plugins (/usr/lib/pop-launcher) so cosmic-launcher & cosmic-app-library
+# can search and launch desktop apps, files, and calculator
+if [ -d /usr/lib/pop-launcher ]; then
+    mkdir -p "${TARGET_ROOT}/usr/lib/pop-launcher"
+    cp -a /usr/lib/pop-launcher/. "${TARGET_ROOT}/usr/lib/pop-launcher/" 2>/dev/null || true
+fi
 
 # Bundle NetworkManager Wi-Fi device plugin so NetworkManager can scan & connect wlan0
 for nm_ver_dir in /usr/lib/x86_64-linux-gnu/NetworkManager/*; do
