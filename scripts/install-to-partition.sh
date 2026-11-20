@@ -89,6 +89,12 @@ mount "${PART}" "${MNT}"
 echo "[install] Copying Serenity rootfs..."
 cp -a "${STAGE_DIR}/." "${MNT}/"
 
+# Automatically bundle Smithay compositor + Serenity Shell GUI if release binaries are built
+if [ -x "${ROOT_DIR}/target/release/serenity-compositor" ]; then
+    echo "[install] Detected release compositor build; bundling Smithay + GUI libraries..."
+    "${ROOT_DIR}/scripts/bundle-compositor.sh" "${MNT}"
+fi
+
 mkdir -p "${MNT}/boot"
 USE_INITRD=0
 if [ -r "${CUSTOM_KERNEL}" ]; then

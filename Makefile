@@ -63,6 +63,9 @@ compositor:
 shell-ui:
 	cargo build -p serenity-shell
 
+desktop-release: disk
+	cargo build --release -p serenity-compositor -p serenity-shell
+
 run-compositor: compositor
 	cargo run -p serenity-compositor
 
