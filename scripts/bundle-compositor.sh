@@ -95,6 +95,14 @@ if [ -e /lib64/ld-linux-x86-64.so.2 ]; then
     cp -nL /lib64/ld-linux-x86-64.so.2 "${TARGET_ROOT}/lib64/"
 fi
 
+# Bundle POSIX /bin/sh (dash, 127 KiB, only libc) so COSMIC panel buttons,
+# pop-launcher, Cargo build scripts, and desktop apps calling `sh -c ...` work cleanly
+if [ -x /usr/bin/dash ]; then
+    mkdir -p "${TARGET_ROOT}/bin"
+    install -m 0755 /usr/bin/dash "${TARGET_ROOT}/bin/sh"
+    ln -sf /bin/sh "${TARGET_ROOT}/usr/bin/sh"
+fi
+
 # Bundle D-Bus daemon, seatd, NetworkManager, wpa_supplicant, nmcli, cosmic-settings, cosmic-randr & pop-launcher
 for sys_bin in \
     /usr/bin/dbus-daemon /usr/bin/dbus-run-session \
