@@ -115,12 +115,26 @@ fn spawn_shell() -> io::Result<Child> {
     }
     cmd.current_dir("/root");
 
-    // Create a new session and attach a real controlling terminal (/dev/ttyS0 or /dev/console)
-    // so Ctrl+C, job control, and interactive line editing work cleanly in Nushell.
+    // Choose controlling terminal: /dev/ttyS0 for QEMU serial, /dev/tty1 for real hardware display.
+    let use_serial = fs::read_to_string("/proc/cmdline")
+        .map(|s| s.contains("console=ttyS0"))
+        .unwrap_or(false);
+
+    // Create a new session and attach a real controlling terminal so Ctrl+C, job control,
+    // and interactive line editing work cleanly in Nushell on both QEMU and bare metal.
     unsafe {
-        cmd.pre_exec(|| {
+        cmd.pre_exec(move || {
             libc::setsid();
-            for tty in [b"/dev/ttyS0\0".as_ptr(), b"/dev/console\0".as_ptr()] {
+            let candidates: &[*const u8] = if use_serial {
+                &[b"/dev/ttyS0\0".as_ptr(), b"/dev/console\0".as_ptr()]
+            } else {
+                &[
+                    b"/dev/tty1\0".as_ptr(),
+                    b"/dev/tty0\0".as_ptr(),
+                    b"/dev/console\0".as_ptr(),
+                ]
+            };
+            for &tty in candidates {
                 let fd = libc::open(tty as *const libc::c_char, libc::O_RDWR);
                 if fd >= 0 {
                     libc::dup2(fd, 0);
