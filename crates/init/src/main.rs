@@ -220,6 +220,24 @@ fn handle_multicall_applet() -> bool {
             true
         }
         "start-desktop" => {
+            // Start seatd (as root) before dropping privileges so non-root Wayland compositors
+            // like cosmic-comp can securely access DRM/KMS and input devices via libseat.
+            if Path::new("/usr/bin/seatd").exists() && !Path::new("/run/seatd.sock").exists() {
+                println!("[serenity] Starting seatd daemon (-g video)...");
+                let _ = Command::new("/usr/bin/seatd")
+                    .args(["-g", "video"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                for _ in 0..20 {
+                    if Path::new("/run/seatd.sock").exists() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+
             println!("[serenity] Dropping privileges to user 'serenity' (UID 1000)...");
             let groups: [libc::gid_t; 4] = [1000, 44, 104, 107]; // serenity, video, input, render
             unsafe {
@@ -291,11 +309,13 @@ fn setup_desktop_permissions() {
     // so Smithay compositor runs as regular user UID 1000 instead of root.
     let _ = fs::create_dir_all("/home/serenity");
     let _ = fs::create_dir_all("/run/user/1000");
+    let _ = fs::create_dir_all("/tmp/.X11-unix");
     unsafe {
         for dir in [b"/home/serenity\0".as_ptr(), b"/run/user/1000\0".as_ptr()] {
             libc::chown(dir as *const libc::c_char, 1000, 1000);
         }
         libc::chmod(b"/run/user/1000\0".as_ptr() as *const libc::c_char, 0o700);
+        libc::chmod(b"/tmp/.X11-unix\0".as_ptr() as *const libc::c_char, 0o1777);
         // Allow non-root terminal emulators (Alacritty) to allocate PTYs via /dev/ptmx
         libc::chmod(b"/dev/ptmx\0".as_ptr() as *const libc::c_char, 0o666);
         libc::chmod(b"/dev/pts/ptmx\0".as_ptr() as *const libc::c_char, 0o666);
@@ -331,13 +351,32 @@ fn setup_desktop_permissions() {
                 .unwrap_or_default();
             let ev_bits = u64::from_str_radix(ev_hex.trim(), 16).unwrap_or(0);
 
-            let mut udev_data = String::from("E:ID_INPUT=1\n");
+            let mut udev_data = String::from("E:ID_INPUT=1\nE:ID_SEAT=seat0\nG:seat\n");
             if (ev_bits & (1 << 1)) != 0 {
                 udev_data.push_str("E:ID_INPUT_KEY=1\nE:ID_INPUT_KEYBOARD=1\n");
             }
             if (ev_bits & (1 << 2)) != 0 || (ev_bits & (1 << 3)) != 0 {
                 udev_data.push_str("E:ID_INPUT_MOUSE=1\n");
             }
+            let _ = fs::write(format!("/run/udev/data/c{}", dev_num), udev_data);
+        }
+    }
+
+    // Tag DRM GPU devices (/sys/class/drm/card*) with seat0 so cosmic-comp's UdevBackend
+    // discovers the GPU and its display outputs without running a full systemd-udevd daemon.
+    if let Ok(entries) = fs::read_dir("/sys/class/drm") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else { continue };
+            if !name_str.starts_with("card") || name_str.contains('-') {
+                continue;
+            }
+            let Ok(dev_num) = fs::read_to_string(entry.path().join("dev")) else { continue };
+            let dev_num = dev_num.trim();
+            let udev_data = format!(
+                "E:ID_SEAT=seat0\nE:ID_FOR_SEAT=drm-{}\nG:seat\nG:master-of-seat\n",
+                name_str
+            );
             let _ = fs::write(format!("/run/udev/data/c{}", dev_num), udev_data);
         }
     }

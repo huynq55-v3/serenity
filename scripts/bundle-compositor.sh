@@ -95,11 +95,11 @@ if [ -e /lib64/ld-linux-x86-64.so.2 ]; then
     cp -nL /lib64/ld-linux-x86-64.so.2 "${TARGET_ROOT}/lib64/"
 fi
 
-# Bundle D-Bus session daemon binaries (config /usr/share/dbus-1/session.conf lives in rootfs/overlay)
-for dbus_bin in /usr/bin/dbus-daemon /usr/bin/dbus-run-session; do
-    if [ -x "${dbus_bin}" ]; then
-        install -m 0755 "${dbus_bin}" "${TARGET_ROOT}/usr/bin/$(basename "${dbus_bin}")"
-        copy_lib_and_deps "${dbus_bin}"
+# Bundle D-Bus session daemon & seatd (so non-root COSMIC Desktop works without systemd)
+for sys_bin in /usr/bin/dbus-daemon /usr/bin/dbus-run-session /usr/bin/seatd; do
+    if [ -x "${sys_bin}" ]; then
+        install -m 0755 "${sys_bin}" "${TARGET_ROOT}/usr/bin/$(basename "${sys_bin}")"
+        copy_lib_and_deps "${sys_bin}"
     fi
 done
 
