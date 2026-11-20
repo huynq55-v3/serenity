@@ -89,20 +89,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust & COSMIC/Wayland/C-library build dependencies
+      - name: Install build dependencies for ${{ matrix.package }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            zstd binutils clang lld libclang-dev pkg-config just cmake nasm \
-            libxkbcommon-dev libwayland-dev libdrm-dev libgbm-dev \
-            libinput-dev libudev-dev libseat-dev libpixman-1-dev \
-            libfontconfig-dev libfreetype-dev libssl-dev libexpat1-dev \
-            libdav1d-dev libdbus-1-dev libdisplay-info-dev libpulse-dev libpipewire-0.3-dev \
-            libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 \
-            libcairo2 libpango-1.0-0 libcups2t64 libasound2t64 libxcomposite1 \
-            libxdamage1 libxfixes3 libxrandr2 libxi6 libxres1 libavahi-client3
-          rustup target add x86_64-unknown-linux-musl
+          SRC_TYPE="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["source"]["type"])' "packages/${{ matrix.package }}/recipe.toml")"
+          echo "Package '${{ matrix.package }}' has source.type=${SRC_TYPE}"
+          case "${SRC_TYPE}" in
+            deb|prebuilt|meta)
+              echo "Lightweight repack — only zstd & binutils needed (already pre-installed)."
+              command -v zstd >/dev/null && command -v ar >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd binutils)
+              ;;
+            syslibs)
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends \
+                zstd libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 \
+                libcairo2 libpango-1.0-0 libcups2t64 libasound2t64 libxcomposite1 \
+                libxdamage1 libxfixes3 libxrandr2 libxi6 libxres1 libavahi-client3
+              ;;
+            custom)
+              if [ "${{ matrix.package }}" = "rust" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends zstd clang lld
+              else
+                command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
+              fi
+              ;;
+            cargo|cargo-gnu)
+              sudo apt-get update
+              sudo apt-get install -y \
+                zstd clang lld libclang-dev pkg-config just cmake nasm \
+                libxkbcommon-dev libwayland-dev libdrm-dev libgbm-dev \
+                libinput-dev libudev-dev libseat-dev libpixman-1-dev \
+                libfontconfig-dev libfreetype-dev libssl-dev libexpat1-dev \
+                libdav1d-dev libdbus-1-dev libdisplay-info-dev libpulse-dev libpipewire-0.3-dev \
+                libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+              rustup target add x86_64-unknown-linux-musl
+              ;;
+          esac
 
       - name: Cache Cargo registry
         uses: actions/cache@v4

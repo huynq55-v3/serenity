@@ -114,6 +114,20 @@ def stage_deb(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
 
     install_assets_and_inline(recipe, stage_dir, stage_dir)
 
+    # Auto-ensure every .desktop entry inside a repacked .deb has StartupWMClass so
+    # COSMIC Dock pinning matches the running Wayland app_id cleanly.
+    apps_dir = stage_dir / "usr" / "share" / "applications"
+    if apps_dir.is_dir():
+        for desktop_file in apps_dir.glob("*.desktop"):
+            text = desktop_file.read_text(encoding="utf-8", errors="ignore")
+            if "StartupWMClass=" not in text and "[Desktop Entry]" in text:
+                text = text.replace(
+                    "[Desktop Entry]\n",
+                    f"[Desktop Entry]\nStartupWMClass={desktop_file.stem}\n",
+                    1,
+                )
+                desktop_file.write_text(text, encoding="utf-8")
+
 
 def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
     """Collect common C/C++ shared libraries + transitive ldd deps into a portable spkg archive."""
