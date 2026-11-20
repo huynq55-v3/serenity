@@ -115,6 +115,14 @@ jobs:
               if [ "${{ matrix.package }}" = "rust" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends zstd clang lld
+              elif [ "${{ matrix.package }}" = "screenshot" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends zstd grim slurp wl-clipboard
+              elif [ "${{ matrix.package }}" = "pipewire" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends \
+                  zstd pipewire pipewire-pulse pipewire-alsa wireplumber \
+                  alsa-ucm-conf alsa-utils libspa-0.2-modules
               else
                 command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
               fi

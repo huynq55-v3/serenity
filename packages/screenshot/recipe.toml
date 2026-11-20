@@ -1,0 +1,108 @@
+[package]
+name = "screenshot"
+version = "1.0.0"
+arch = "x86_64-gnu"
+description = "Wayland screenshot toolkit (grim + slurp + wl-clipboard + COSMIC wrapper)"
+deps = []
+
+[source]
+type = "custom"
+script = """
+mkdir -p "${STAGE_DIR}/usr/bin"
+
+copy_with_deps() {
+    local bin="$1"
+    local dst="$2"
+    mkdir -p "$(dirname "${dst}")"
+    cp -L "${bin}" "${dst}"
+    chmod 0755 "${dst}"
+    ldd "${bin}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+        [ -f "${lib}" ] || continue
+        case "$(basename "${lib}")" in
+            ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
+        esac
+        local ldst="${STAGE_DIR}${lib}"
+        mkdir -p "$(dirname "${ldst}")"
+        [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
+    done
+}
+
+for tool in grim slurp wl-copy wl-paste; do
+    BIN_PATH="$(command -v "${tool}" || true)"
+    if [ -n "${BIN_PATH}" ] && [ -x "${BIN_PATH}" ]; then
+        copy_with_deps "${BIN_PATH}" "${STAGE_DIR}/usr/bin/${tool}"
+    else
+        echo "ERROR: Missing required tool '${tool}' on build host" >&2
+        exit 1
+    fi
+done
+"""
+
+[install.scripts]
+"usr/bin/screenshot" = """#!/bin/sh
+set -eu
+
+OUT_DIR="${XDG_PICTURES_DIR:-$HOME/Pictures}/Screenshots"
+mkdir -p "$OUT_DIR"
+OUT_FILE="$OUT_DIR/screenshot-$(date +%Y%m%d-%H%M%S).png"
+
+MODE="full"
+for arg in "$@"; do
+    case "$arg" in
+        -r|--region|--area|--interactive=true)
+            MODE="region"
+            ;;
+        -f|--full|--interactive=false)
+            MODE="full"
+            ;;
+        -h|--help)
+            echo "Usage: screenshot [--full | --region]"
+            echo "Saves PNG to $OUT_DIR and copies to Wayland clipboard."
+            exit 0
+            ;;
+    esac
+done
+
+if [ "$MODE" = "region" ]; then
+    GEOM="$(slurp)" || exit 1
+    grim -g "$GEOM" "$OUT_FILE"
+else
+    grim "$OUT_FILE"
+fi
+
+if command -v wl-copy >/dev/null 2>&1; then
+    wl-copy -t image/png < "$OUT_FILE" || true
+fi
+
+echo "Saved screenshot: $OUT_FILE"
+"""
+
+"usr/bin/cosmic-screenshot" = """#!/bin/sh
+# Lightweight COSMIC PrintScreen wrapper backed by grim + slurp + wl-copy
+for arg in "$@"; do
+    case "$arg" in
+        --interactive=false)
+            exec /usr/bin/screenshot --full
+            ;;
+    esac
+done
+exec /usr/bin/screenshot --region
+"""
+
+[install.inline]
+"usr/share/applications/screenshot.desktop" = """[Desktop Entry]
+Version=1.0
+Name=Screenshot
+GenericName=Screen Capture
+Comment=Capture full screen or selected region to PNG and clipboard
+Exec=/usr/bin/screenshot --region
+Terminal=false
+Icon=applets-screenshooter
+Type=Application
+Categories=Utility;Graphics;
+Actions=FullScreen;
+
+[Desktop Action FullScreen]
+Name=Capture Full Screen
+Exec=/usr/bin/screenshot --full
+"""

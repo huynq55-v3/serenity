@@ -1,0 +1,102 @@
+[package]
+name = "pipewire"
+version = "1.0.0"
+arch = "x86_64-gnu"
+description = "PipeWire + WirePlumber + PipeWire-Pulse audio server with ALSA UCM2 configs"
+deps = ["clibrary"]
+
+[source]
+type = "custom"
+script = """
+mkdir -p "${STAGE_DIR}/usr/bin"
+
+collect_ldd_deps() {
+    local elf="$1"
+    ldd "${elf}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+        [ -f "${lib}" ] || continue
+        case "$(basename "${lib}")" in
+            ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
+        esac
+        local ldst="${STAGE_DIR}${lib}"
+        mkdir -p "$(dirname "${ldst}")"
+        [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
+    done
+}
+
+copy_bin() {
+    local bin="$1"
+    if [ -x "${bin}" ]; then
+        local dst="${STAGE_DIR}${bin}"
+        mkdir -p "$(dirname "${dst}")"
+        cp -L "${bin}" "${dst}"
+        chmod 0755 "${dst}"
+        collect_ldd_deps "${bin}"
+    fi
+}
+
+copy_dir_with_deps() {
+    local dir="$1"
+    if [ -d "${dir}" ]; then
+        local dst="${STAGE_DIR}${dir}"
+        mkdir -p "$(dirname "${dst}")"
+        cp -a "${dir}" "$(dirname "${dst}")/"
+        find "${dir}" -type f -name "*.so*" | while read -r so; do
+            collect_ldd_deps "${so}"
+        done
+    fi
+}
+
+# Core PipeWire, PipeWire-Pulse, WirePlumber & ALSA utilities
+for bin in \
+    /usr/bin/pipewire \
+    /usr/bin/pipewire-pulse \
+    /usr/bin/wireplumber \
+    /usr/bin/wpctl \
+    /usr/bin/pw-cli \
+    /usr/bin/pw-play \
+    /usr/bin/pw-record \
+    /usr/bin/aplay \
+    /usr/bin/amixer; do
+    copy_bin "${bin}"
+done
+
+# SPA, PipeWire, WirePlumber & ALSA plugins (with transitive ldd deps)
+for mod_dir in \
+    /usr/lib/x86_64-linux-gnu/spa-0.2 \
+    /usr/lib/x86_64-linux-gnu/pipewire-0.3 \
+    /usr/lib/x86_64-linux-gnu/wireplumber-0.5 \
+    /usr/lib/x86_64-linux-gnu/alsa-lib; do
+    copy_dir_with_deps "${mod_dir}"
+done
+
+# Runtime configs, WirePlumber Lua scripts & ALSA UCM2 profiles (required for Intel SOF audio)
+for data_dir in \
+    /usr/share/pipewire \
+    /usr/share/wireplumber \
+    /usr/share/alsa \
+    /etc/alsa; do
+    if [ -d "${data_dir}" ]; then
+        mkdir -p "${STAGE_DIR}$(dirname "${data_dir}")"
+        cp -a "${data_dir}" "${STAGE_DIR}$(dirname "${data_dir}")/"
+    fi
+done
+"""
+
+[install.scripts]
+"usr/bin/start-audio" = """#!/bin/sh
+# Start PipeWire, PipeWire-Pulse, and WirePlumber for the current user session
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
+
+if [ ! -e "${XDG_RUNTIME_DIR}/pipewire-0" ] && [ -x /usr/bin/pipewire ]; then
+    /usr/bin/pipewire >/tmp/pipewire.log 2>&1 &
+    sleep 0.3
+fi
+if [ ! -e "${XDG_RUNTIME_DIR}/pulse/native" ] && [ -x /usr/bin/pipewire-pulse ]; then
+    /usr/bin/pipewire-pulse >/tmp/pipewire-pulse.log 2>&1 &
+fi
+if [ -x /usr/bin/wireplumber ]; then
+    /usr/bin/wireplumber >/tmp/wireplumber.log 2>&1 &
+fi
+echo "Audio daemons started (logs in /tmp/pipewire*.log, /tmp/wireplumber.log)."
+"""

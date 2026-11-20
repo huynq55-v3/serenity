@@ -120,7 +120,13 @@ mkdir -p "${MOD_OUT}" "${MNT}/etc/serenity" "${MNT}/lib/firmware"
 : > "${MOD_LIST}"
 
 declare -A SEEN_MODS=()
-TARGET_MODS=(ccm cmac aesni_intel libarc4 iwlwifi iwlmvm i915 usbhid hid_generic hid_multitouch i2c_hid_acpi psmouse)
+TARGET_MODS=(
+    ccm cmac aesni_intel libarc4 iwlwifi iwlmvm i915
+    usbhid hid_generic hid_multitouch i2c_hid_acpi psmouse
+    snd_hda_intel snd_hda_codec_realtek snd_hda_codec_generic snd_hda_codec_hdmi
+    snd_sof_pci_intel_tgl snd_sof_pci_intel_adl snd_sof_pci_intel_mtl snd_sof_pci_intel_cnl
+    snd_usb_audio
+)
 for mod in "${TARGET_MODS[@]}"; do
     while read -r kind modpath _; do
         [ "${kind}" = "insmod" ] || continue
@@ -153,6 +159,13 @@ if [ -d /lib/firmware/intel/iwlwifi ]; then
     mkdir -p "${MNT}/lib/firmware/intel"
     cp -a /lib/firmware/intel/iwlwifi "${MNT}/lib/firmware/intel/"
 fi
+# Intel Smart Sound Technology (SOF) firmware & topologies for bare-metal laptop audio
+for sof_dir in /lib/firmware/intel/sof*; do
+    if [ -d "${sof_dir}" ]; then
+        mkdir -p "${MNT}/lib/firmware/intel"
+        cp -a "${sof_dir}" "${MNT}/lib/firmware/intel/"
+    fi
+done
 cp -a /lib/firmware/iwlwifi* "${MNT}/lib/firmware/" 2>/dev/null || true
 cp -a /lib/firmware/regulatory.db* "${MNT}/lib/firmware/" 2>/dev/null || true
 

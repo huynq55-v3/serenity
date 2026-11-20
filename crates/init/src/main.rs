@@ -453,7 +453,7 @@ fn handle_multicall_applet() -> bool {
             }
 
             println!("[serenity] Dropping privileges to user 'serenity' (UID 1000)...");
-            let groups: [libc::gid_t; 4] = [1000, 44, 104, 107]; // serenity, video, input, render
+            let groups: [libc::gid_t; 5] = [1000, 29, 44, 104, 107]; // serenity, audio, video, input, render
             unsafe {
                 if libc::setgroups(groups.len(), groups.as_ptr()) != 0 {
                     eprintln!("[serenity] setgroups failed: {}", io::Error::last_os_error());
@@ -497,6 +497,31 @@ fn handle_multicall_applet() -> bool {
                     let _ = Command::new("/usr/bin/dbus-daemon")
                         .args(["--session", &format!("--address={}", bus_addr), "--fork"])
                         .status();
+                }
+                // Start PipeWire + PipeWire-Pulse + WirePlumber user audio stack if installed
+                if Path::new("/usr/bin/pipewire").exists() {
+                    for (bin, log_path) in [
+                        ("/usr/bin/pipewire", "/tmp/pipewire.log"),
+                        ("/usr/bin/pipewire-pulse", "/tmp/pipewire-pulse.log"),
+                        ("/usr/bin/wireplumber", "/tmp/wireplumber.log"),
+                    ] {
+                        if Path::new(bin).exists() {
+                            let log_out = fs::File::create(log_path)
+                                .map(std::process::Stdio::from)
+                                .unwrap_or_else(|_| std::process::Stdio::null());
+                            let log_err = fs::File::create(log_path)
+                                .map(std::process::Stdio::from)
+                                .unwrap_or_else(|_| std::process::Stdio::null());
+                            let _ = Command::new(bin)
+                                .stdin(std::process::Stdio::null())
+                                .stdout(log_out)
+                                .stderr(log_err)
+                                .spawn();
+                            if bin == "/usr/bin/pipewire" {
+                                thread::sleep(Duration::from_millis(150));
+                            }
+                        }
+                    }
                 }
                 Command::new("/usr/bin/cosmic-session")
                     .current_dir("/home/serenity")
@@ -542,15 +567,39 @@ fn setup_desktop_permissions() {
         libc::chmod(b"/dev/pts/ptmx\0".as_ptr() as *const libc::c_char, 0o666);
     }
 
-    for (dir_path, gid) in [("/dev/dri", 44u32), ("/dev/input", 104u32)] {
+    for (dir_path, gid) in [("/dev/dri", 44u32), ("/dev/input", 104u32), ("/dev/snd", 29u32)] {
         if let Ok(entries) = fs::read_dir(dir_path) {
             for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    continue;
+                }
                 if let Ok(c_path) = CString::new(entry.path().to_string_lossy().as_bytes()) {
                     unsafe {
                         libc::chown(c_path.as_ptr(), 0, gid);
                         libc::chmod(c_path.as_ptr(), 0o660);
                     }
                 }
+            }
+        }
+    }
+
+    // Tag ALSA control devices in /run/udev/data/c<major>:<minor> so PipeWire/WirePlumber
+    // discovers sound cards via libudev without running systemd-udevd.
+    let _ = fs::create_dir_all("/run/udev/data");
+    if let Ok(entries) = fs::read_dir("/sys/class/sound") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else { continue };
+            if !name_str.starts_with("controlC") {
+                continue;
+            }
+            if let Ok(dev_num) = fs::read_to_string(entry.path().join("dev")) {
+                let dev_num = dev_num.trim();
+                let udev_data = format!(
+                    "E:ID_SEAT=seat0\nE:ID_FOR_SEAT=sound-{}\nG:seat\n",
+                    name_str
+                );
+                let _ = fs::write(format!("/run/udev/data/c{}", dev_num), udev_data);
             }
         }
     }
