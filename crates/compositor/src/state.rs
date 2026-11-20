@@ -206,22 +206,7 @@ impl XdgShellHandler for SerenityState {
             .and_then(|o| self.space.output_geometry(o))
             .map(|g| g.size);
 
-        // Identify desktop shell / login greeter vs normal floating app windows.
-        // Because serenity-login spawns serenity-shell right before exiting, check count <= 1
-        // or whether an existing base shell is already present with matching app_id.
-        let is_floating_app = self.space.elements().any(|w| {
-            w.toplevel().is_some_and(|t| {
-                t.with_pending_state(|s| s.states.contains(xdg_toplevel::State::Fullscreen))
-            })
-        }) && self.space.elements().count() >= 1
-            && surface
-                .with_pending_state(|s| s.title.clone().unwrap_or_default())
-                .as_str()
-                != "Serenity Desktop";
-
-        // Even simpler & rock-solid: if this is NOT Alacritty/app (i.e. first window OR login->desktop handoff),
-        // map fullscreen at (0, 0) covering 100% of the output.
-        let is_base_layer = !is_floating_app;
+        let is_base_layer = self.space.elements().count() == 0;
         if is_base_layer {
             self.space.map_element(window.clone(), (0, 0), true);
             surface.with_pending_state(|state| {
