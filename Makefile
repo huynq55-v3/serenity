@@ -71,7 +71,7 @@ run-compositor: compositor
 	cargo run -p serenity-compositor
 
 run-desktop: compositor shell-ui
-	cargo run -p serenity-compositor -- ./target/debug/serenity-shell
+	cargo run -p serenity-compositor -- ./target/debug/serenity-login
 
 nushell:
 	@chmod +x scripts/fetch-nushell.sh

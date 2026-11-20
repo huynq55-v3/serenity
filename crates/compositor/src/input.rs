@@ -101,7 +101,17 @@ pub fn handle_input<I: InputBackend>(
                     .element_under(state.pointer_location)
                     .map(|(w, _)| w.clone());
                 if let Some(window) = under {
-                    state.space.raise_element(&window, true);
+                    // Keep the base desktop shell (first mapped element) below floating app windows
+                    // so clicking the macOS Dock never hides an open Alacritty terminal.
+                    let is_base_desktop = state
+                        .space
+                        .elements()
+                        .next()
+                        .is_some_and(|first| first == &window)
+                        && state.space.elements().count() > 1;
+                    if !is_base_desktop {
+                        state.space.raise_element(&window, true);
+                    }
                     if let Some(toplevel) = window.toplevel() {
                         if let Some(kb) = state.seat.get_keyboard() {
                             kb.set_focus(state, Some(toplevel.wl_surface().clone()), serial);

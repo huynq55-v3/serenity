@@ -10,7 +10,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMP_BIN="${ROOT_DIR}/target/release/serenity-compositor"
+LOGIN_BIN="${ROOT_DIR}/target/release/serenity-login"
 SHELL_BIN="${ROOT_DIR}/target/release/serenity-shell"
+ALACRITTY_BIN="$(command -v alacritty || true)"
 TARGET_ROOT="${1:-${ROOT_DIR}/build/rootfs-stage}"
 
 if [ ! -x "${COMP_BIN}" ]; then
@@ -19,12 +21,16 @@ if [ ! -x "${COMP_BIN}" ]; then
     exit 1
 fi
 
-echo "[bundle-compositor] Installing serenity-compositor into ${TARGET_ROOT}..."
+echo "[bundle-compositor] Installing desktop binaries into ${TARGET_ROOT}/usr/bin..."
 mkdir -p "${TARGET_ROOT}/usr/bin"
 install -m 0755 "${COMP_BIN}" "${TARGET_ROOT}/usr/bin/serenity-compositor"
-if [ -x "${SHELL_BIN}" ]; then
-    echo "[bundle-compositor] Installing serenity-shell into ${TARGET_ROOT}..."
-    install -m 0755 "${SHELL_BIN}" "${TARGET_ROOT}/usr/bin/serenity-shell"
+[ -x "${LOGIN_BIN}" ] && install -m 0755 "${LOGIN_BIN}" "${TARGET_ROOT}/usr/bin/serenity-login"
+[ -x "${SHELL_BIN}" ] && install -m 0755 "${SHELL_BIN}" "${TARGET_ROOT}/usr/bin/serenity-shell"
+if [ -n "${ALACRITTY_BIN}" ] && [ -x "${ALACRITTY_BIN}" ]; then
+    echo "[bundle-compositor] Bundling Alacritty terminal (${ALACRITTY_BIN})..."
+    install -m 0755 "${ALACRITTY_BIN}" "${TARGET_ROOT}/usr/bin/alacritty"
+else
+    echo "[bundle-compositor] WARN: 'alacritty' not installed on host. Run: sudo apt install -y alacritty"
 fi
 
 copy_lib_and_deps() {
@@ -38,10 +44,9 @@ copy_lib_and_deps() {
 }
 
 echo "[bundle-compositor] Copying shared libraries via ldd..."
-copy_lib_and_deps "${COMP_BIN}"
-if [ -x "${SHELL_BIN}" ]; then
-    copy_lib_and_deps "${SHELL_BIN}"
-fi
+for b in "${COMP_BIN}" "${LOGIN_BIN}" "${SHELL_BIN}" "${ALACRITTY_BIN}"; do
+    [ -n "${b}" ] && [ -x "${b}" ] && copy_lib_and_deps "${b}"
+done
 
 # Also bundle EGL/GLES2/GBM/Mesa DRI drivers dynamically loaded via dlopen()
 for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
@@ -98,7 +103,10 @@ if [ -d /usr/share/X11/locale ]; then
     cp -aL /usr/share/X11/locale "${TARGET_ROOT}/usr/share/X11/locale"
 fi
 
-# Bundle DejaVu fallback fonts so all Wayland GUI apps render crisp text
+# Bundle Fontconfig + DejaVu fonts so Alacritty & all Wayland GUI apps render crisp text
+if [ -d /etc/fonts ]; then
+    cp -aL /etc/fonts "${TARGET_ROOT}/etc/" 2>/dev/null || true
+fi
 if [ -d /usr/share/fonts/truetype/dejavu ]; then
     mkdir -p "${TARGET_ROOT}/usr/share/fonts/truetype"
     cp -aL /usr/share/fonts/truetype/dejavu "${TARGET_ROOT}/usr/share/fonts/truetype/"

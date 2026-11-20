@@ -206,14 +206,36 @@ impl XdgShellHandler for SerenityState {
             .and_then(|o| self.space.output_geometry(o))
             .map(|g| g.size);
 
-        self.space.map_element(window.clone(), (0, 0), true);
-        surface.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Activated);
-            state.states.set(xdg_toplevel::State::Maximized);
-            if let Some(size) = output_size {
-                state.size = Some(size);
-            }
-        });
+        let is_base_layer = self.space.elements().count() == 0;
+        if is_base_layer {
+            // Base window (serenity-login or serenity-shell) fills the full display.
+            self.space.map_element(window.clone(), (0, 0), true);
+            surface.with_pending_state(|state| {
+                state.states.set(xdg_toplevel::State::Activated);
+                state.states.set(xdg_toplevel::State::Maximized);
+                if let Some(size) = output_size {
+                    state.size = Some(size);
+                }
+            });
+        } else {
+            // App windows (e.g. Alacritty launched from the Dock) float centered above the Dock.
+            let win_w = 1020;
+            let win_h = 620;
+            let offset = ((self.space.elements().count() as i32 - 1) % 5) * 28;
+            let (x, y) = if let Some(out) = output_size {
+                (
+                    ((out.w - win_w) / 2).max(20) + offset,
+                    ((out.h - win_h - 100) / 2).max(48) + offset,
+                )
+            } else {
+                (120 + offset, 70 + offset)
+            };
+            self.space.map_element(window.clone(), (x, y), true);
+            surface.with_pending_state(|state| {
+                state.states.set(xdg_toplevel::State::Activated);
+                state.size = Some((win_w, win_h).into());
+            });
+        }
         surface.send_configure();
 
         // Focus keyboard on the newly opened window
@@ -221,7 +243,7 @@ impl XdgShellHandler for SerenityState {
         if let Some(kb) = self.seat.get_keyboard() {
             kb.set_focus(self, Some(surface.wl_surface().clone()), serial);
         }
-        info!("Mapped new maximized Wayland toplevel window ({:?})", output_size);
+        info!("Mapped new Wayland toplevel window (base_layer={})", is_base_layer);
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
@@ -245,6 +267,17 @@ impl XdgShellHandler for SerenityState {
         if let Some(window) = window {
             self.space.unmap_elem(&window);
             info!("Unmapped destroyed Wayland toplevel window");
+            // Return keyboard focus to the topmost remaining window
+            let next_focus = self
+                .space
+                .elements()
+                .last()
+                .and_then(|w| w.toplevel())
+                .map(|t| t.wl_surface().clone());
+            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            if let Some(kb) = self.seat.get_keyboard() {
+                kb.set_focus(self, next_focus, serial);
+            }
         }
     }
 }

@@ -236,10 +236,14 @@ fn handle_multicall_applet() -> bool {
                 std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
             }
             let extra_args: Vec<String> = std::env::args().skip(1).collect();
-            let err = Command::new("/usr/bin/serenity-compositor")
-                .args(&extra_args)
-                .current_dir("/home/serenity")
-                .exec();
+            let mut cmd = Command::new("/usr/bin/serenity-compositor");
+            if extra_args.is_empty() {
+                // Default desktop boot flow: Smithay compositor -> standalone Login greeter
+                cmd.args(["--", "/usr/bin/serenity-login"]);
+            } else {
+                cmd.args(&extra_args);
+            }
+            let err = cmd.current_dir("/home/serenity").exec();
             eprintln!("[serenity] failed to exec /usr/bin/serenity-compositor: {}", err);
             std::process::exit(1);
         }
