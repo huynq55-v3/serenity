@@ -120,7 +120,7 @@ mkdir -p "${MOD_OUT}" "${MNT}/etc/serenity" "${MNT}/lib/firmware"
 : > "${MOD_LIST}"
 
 declare -A SEEN_MODS=()
-TARGET_MODS=(iwlwifi iwlmvm i915 usbhid hid_generic hid_multitouch i2c_hid_acpi psmouse)
+TARGET_MODS=(ccm cmac aesni_intel libarc4 iwlwifi iwlmvm i915 usbhid hid_generic hid_multitouch i2c_hid_acpi psmouse)
 for mod in "${TARGET_MODS[@]}"; do
     while read -r kind modpath _; do
         [ "${kind}" = "insmod" ] || continue
