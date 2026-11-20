@@ -58,13 +58,15 @@ done
 
 ln -sf gawk "${STAGE_DIR}/usr/bin/awk"
 
-for wrap in egrep fgrep; do
-    cat > "${STAGE_DIR}/usr/bin/${wrap}" <<EOF
+cat > "${STAGE_DIR}/usr/bin/egrep" <<'EOF'
 #!/bin/sh
-exec /usr/bin/grep -${wrap%grep} "\$@"
+exec /usr/bin/grep -E "$@"
 EOF
-    chmod 0755 "${STAGE_DIR}/usr/bin/${wrap}"
-done
+cat > "${STAGE_DIR}/usr/bin/fgrep" <<'EOF'
+#!/bin/sh
+exec /usr/bin/grep -F "$@"
+EOF
+chmod 0755 "${STAGE_DIR}/usr/bin/egrep" "${STAGE_DIR}/usr/bin/fgrep"
 
 if [ -f /usr/share/misc/magic.mgc ]; then
     mkdir -p "${STAGE_DIR}/usr/share/misc"
