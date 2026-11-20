@@ -1,15 +1,22 @@
 name: Build Serenity Packages
 
+# Manual trigger only (incremental build by default)
 on:
-  push:
-    branches: [main, master]
-    paths:
-      - "packages/**"
-      - "scripts/build-package.py"
-      - ".github/workflows/build-packages.yml"
   workflow_dispatch:
-
-# Parallel matrix factory for Serenity Linux packages (spkg)
+    inputs:
+      mode:
+        description: "Build mode: only missing/updated packages, or rebuild all"
+        required: true
+        default: "missing-or-updated"
+        type: choice
+        options:
+          - missing-or-updated
+          - all
+      packages:
+        description: "Optional comma-separated package names (e.g. cosmic-settings-daemon,cosmic-applets)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -22,16 +29,58 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       packages: ${{ steps.list.outputs.packages }}
+      has_packages: ${{ steps.list.outputs.has_packages }}
     steps:
       - uses: actions/checkout@v4
       - id: list
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_PACKAGES: ${{ inputs.packages }}
+          INDEX_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/index.json
         run: |
-          pkgs=$(python3 -c 'import json, pathlib; print(json.dumps(sorted(p.parent.name for p in pathlib.Path("packages").glob("*/recipe.toml"))))')
-          echo "packages=${pkgs}" >> "$GITHUB_OUTPUT"
-          echo "Discovered packages: ${pkgs}"
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, pathlib, tomllib, urllib.request
+
+          all_recipes = {
+              p.parent.name: tomllib.loads(p.read_text(encoding="utf-8"))
+              for p in sorted(pathlib.Path("packages").glob("*/recipe.toml"))
+          }
+
+          explicit = [s.strip() for s in os.environ.get("INPUT_PACKAGES", "").split(",") if s.strip()]
+          mode = os.environ.get("INPUT_MODE", "missing-or-updated")
+
+          if explicit:
+              selected = [p for p in explicit if p in all_recipes]
+          elif mode == "all":
+              selected = sorted(all_recipes.keys())
+          else:
+              existing = {}
+              try:
+                  req = urllib.request.Request(os.environ["INDEX_URL"], headers={"User-Agent": "serenity-ci"})
+                  with urllib.request.urlopen(req, timeout=15) as resp:
+                      existing = json.loads(resp.read().decode("utf-8")).get("packages", {})
+              except Exception:
+                  existing = {}
+
+              selected = []
+              for name, recipe in sorted(all_recipes.items()):
+                  pkg = recipe["package"]
+                  cur = existing.get(name)
+                  if (
+                      cur is None
+                      or cur.get("version") != pkg.get("version")
+                      or cur.get("deps", []) != pkg.get("deps", [])
+                  ):
+                      selected.append(name)
+
+          print(f"packages={json.dumps(selected)}")
+          print(f"has_packages={'true' if selected else 'false'}")
+          PY
+          echo "Selected packages to build: $(cat "$GITHUB_OUTPUT")"
 
   build:
     needs: discover
+    if: needs.discover.outputs.has_packages == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -80,25 +129,34 @@ jobs:
             build/packages/*.meta.json
 
   publish:
-    needs: build
+    needs: [discover, build]
+    if: always() && needs.discover.outputs.has_packages == 'true' && (needs.build.result == 'success' || needs.build.result == 'failure')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all built packages
+      - name: Download newly built package artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           path: build/artifacts
           merge-multiple: true
 
-      - name: Merge metadata into index.json
+      - name: Fetch existing index.json from Release (preserve previous packages)
+        run: |
+          mkdir -p build/artifacts
+          curl -fL "https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/index.json" \
+            -o build/existing-index.json || echo '{"version":1,"packages":{}}' > build/existing-index.json
+
+      - name: Merge newly built packages into index.json
         run: |
           python3 scripts/build-package.py \
             --merge-meta-dir build/artifacts \
+            --base-index build/existing-index.json \
             --out-dir build/artifacts
           cat build/artifacts/index.json
 
-      - name: Publish packages and index.json to GitHub Releases
+      - name: Publish updated packages and index.json to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}

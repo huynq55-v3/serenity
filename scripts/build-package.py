@@ -225,13 +225,28 @@ def build_recipe(recipe_path: Path, out_dir: Path, base_url: str) -> tuple[str, 
     return name, meta
 
 
-def merge_meta_files(meta_dir: Path, out_index: Path) -> None:
+def merge_meta_files(meta_dir: Path, out_index: Path, base_index: Path | None = None) -> None:
     index = {"version": 1, "packages": {}}
+    if base_index is not None and base_index.is_file():
+        try:
+            existing = json.loads(base_index.read_text(encoding="utf-8"))
+            if isinstance(existing.get("packages"), dict):
+                index["packages"].update(existing["packages"])
+                print(
+                    f"[factory] Loaded {len(index['packages'])} existing package(s) from {base_index}."
+                )
+        except Exception as e:
+            print(f"[factory] WARN: Could not read base index {base_index}: {e}")
+
+    updated = 0
     for meta_file in sorted(meta_dir.glob("*.meta.json")):
         data = json.loads(meta_file.read_text(encoding="utf-8"))
         index["packages"][data["name"]] = data["meta"]
+        updated += 1
     out_index.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
-    print(f"[factory] Merged {len(index['packages'])} package(s) into {out_index}.")
+    print(
+        f"[factory] Merged {updated} updated package(s) -> {out_index} (total: {len(index['packages'])})."
+    )
 
 
 def main() -> int:
@@ -259,6 +274,12 @@ def main() -> int:
         help="Merge all *.meta.json in this directory into <out-dir>/index.json and exit",
     )
     parser.add_argument(
+        "--base-index",
+        type=Path,
+        default=None,
+        help="Optional existing index.json to preserve previously published packages when merging",
+    )
+    parser.add_argument(
         "packages",
         nargs="*",
         help="Optional specific package names to build (default: all in packages/)",
@@ -267,7 +288,7 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.merge_meta_dir is not None:
-        merge_meta_files(args.merge_meta_dir, args.out_dir / "index.json")
+        merge_meta_files(args.merge_meta_dir, args.out_dir / "index.json", args.base_index)
         return 0
 
     if args.packages:
