@@ -64,6 +64,9 @@ compositor:
 shell-ui:
 	cargo build -p serenity-shell
 
+alacritty:
+	cargo install alacritty --root $(BUILD_DIR)/userland --locked
+
 desktop-release: disk
 	cargo build --release -p serenity-compositor -p serenity-shell
 

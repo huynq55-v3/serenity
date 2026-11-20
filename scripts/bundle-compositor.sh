@@ -12,7 +12,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMP_BIN="${ROOT_DIR}/target/release/serenity-compositor"
 LOGIN_BIN="${ROOT_DIR}/target/release/serenity-login"
 SHELL_BIN="${ROOT_DIR}/target/release/serenity-shell"
-ALACRITTY_BIN="$(command -v alacritty || true)"
+ALACRITTY_BIN=""
+if [ -x "${ROOT_DIR}/build/userland/bin/alacritty" ]; then
+    ALACRITTY_BIN="${ROOT_DIR}/build/userland/bin/alacritty"
+elif command -v alacritty >/dev/null 2>&1; then
+    ALACRITTY_BIN="$(command -v alacritty)"
+fi
 TARGET_ROOT="${1:-${ROOT_DIR}/build/rootfs-stage}"
 
 if [ ! -x "${COMP_BIN}" ]; then
