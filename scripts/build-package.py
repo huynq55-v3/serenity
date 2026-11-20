@@ -11,6 +11,7 @@ Supported source types:
   - cargo-gnu : clones a Rust GUI/Wayland repo (e.g. COSMIC, Alacritty) and builds native x86_64-gnu
   - deb       : downloads an upstream .deb package, extracts data.tar.*, and repacks into .tar.zst
   - syslibs   : collects common C/C++ shared libraries from the build host (e.g. clibrary for Chrome)
+  - custom    : runs a custom staging shell script declared in [source] script = "..."
   - meta      : dependency-only / config-only meta-package (e.g. cosmic-desktop)
 """
 import argparse
@@ -162,6 +163,17 @@ def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
     install_assets_and_inline(recipe, None, stage_dir)
 
 
+def stage_custom(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
+    """Run a custom bash script with STAGE_DIR and WORK_DIR env vars to assemble complex packages."""
+    script = recipe["source"]["script"]
+    env = os.environ.copy()
+    env["STAGE_DIR"] = str(stage_dir)
+    env["WORK_DIR"] = str(work_dir)
+    env["PKG_VERSION"] = str(recipe["package"]["version"])
+    subprocess.run(["bash", "-euo", "pipefail", "-c", script], env=env, check=True)
+    install_assets_and_inline(recipe, None, stage_dir)
+
+
 def stage_prebuilt(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
     src = recipe["source"]
     url = src["url"]
@@ -301,6 +313,8 @@ def build_recipe(recipe_path: Path, out_dir: Path, base_url: str) -> tuple[str, 
             stage_deb(recipe, stage_dir, work_dir)
         elif src_type == "syslibs":
             stage_syslibs(recipe, stage_dir, work_dir)
+        elif src_type == "custom":
+            stage_custom(recipe, stage_dir, work_dir)
         elif src_type == "meta":
             install_assets_and_inline(recipe, None, stage_dir)
         else:

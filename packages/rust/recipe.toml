@@ -1,0 +1,84 @@
+[package]
+name = "rust"
+version = "1.87.0"
+arch = "x86_64-gnu"
+description = "Rust compiler (rustc) + Cargo package manager (x86_64-unknown-linux-gnu) with self-contained clang/lld linker & CRT"
+deps = ["clibrary"]
+
+[source]
+type = "custom"
+script = """
+RUST_VER="${PKG_VERSION}"
+TARGET="x86_64-unknown-linux-gnu"
+BASE="https://static.rust-lang.org/dist"
+
+mkdir -p "${WORK_DIR}/dl" "${STAGE_DIR}/usr"
+
+for comp in "rustc-${RUST_VER}-${TARGET}" "cargo-${RUST_VER}-${TARGET}" "rust-std-${RUST_VER}-${TARGET}"; do
+    echo "  -> Downloading ${comp}.tar.xz..."
+    curl -fsSL "${BASE}/${comp}.tar.xz" -o "${WORK_DIR}/dl/${comp}.tar.xz"
+    tar -xf "${WORK_DIR}/dl/${comp}.tar.xz" -C "${WORK_DIR}"
+    "${WORK_DIR}/${comp}/install.sh" \
+        --prefix="${STAGE_DIR}/usr" \
+        --without=rust-docs \
+        --disable-ldconfig
+done
+
+# Remove uninstall metadata & docs to keep the spkg archive lean
+rm -rf "${STAGE_DIR}/usr/lib/rustlib/uninstall.sh" \
+       "${STAGE_DIR}/usr/lib/rustlib/install.log" \
+       "${STAGE_DIR}/usr/lib/rustlib/manifest-"* \
+       "${STAGE_DIR}/usr/share/doc" \
+       "${STAGE_DIR}/usr/share/man"
+
+# Bundle minimal GNU C linker driver (clang + lld) + glibc/libgcc CRT objects so
+# `cargo build` / `cargo run` can link x86_64-unknown-linux-gnu binaries out-of-the-box!
+copy_bin_and_deps() {
+    local bin="$1"
+    local dst="$2"
+    mkdir -p "$(dirname "${dst}")"
+    cp -L "${bin}" "${dst}"
+    chmod 0755 "${dst}"
+    ldd "${bin}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+        [ -f "${lib}" ] || continue
+        local ldst="${STAGE_DIR}${lib}"
+        mkdir -p "$(dirname "${ldst}")"
+        [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
+    done
+}
+
+CLANG_BIN="$(command -v clang)"
+LLD_BIN="$(command -v ld.lld || command -v lld)"
+copy_bin_and_deps "${CLANG_BIN}" "${STAGE_DIR}/usr/bin/clang"
+copy_bin_and_deps "${LLD_BIN}" "${STAGE_DIR}/usr/bin/ld.lld"
+ln -sf clang "${STAGE_DIR}/usr/bin/cc"
+ln -sf ld.lld "${STAGE_DIR}/usr/bin/ld"
+
+# Copy CRT startup objects & glibc/libgcc linker scripts needed for linking GNU ELF binaries
+mkdir -p "${STAGE_DIR}/usr/lib/x86_64-linux-gnu"
+for f in crt1.o Scrt1.o crti.o crtn.o libc.so libc_nonshared.a libm.so libmvec.so libpthread.a libdl.a librt.a libutil.a; do
+    if [ -e "/usr/lib/x86_64-linux-gnu/${f}" ]; then
+        cp -a "/usr/lib/x86_64-linux-gnu/${f}" "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/"
+    fi
+done
+
+# Copy GCC CRT objects & libgcc static/shared archives (clang uses them automatically to link)
+GCC_DIR="$(dirname "$(gcc -print-libgcc-file-name)")"
+mkdir -p "${STAGE_DIR}${GCC_DIR}"
+for f in crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o libgcc.a libgcc_eh.a libgcc_s.so libgcc_s.so.1; do
+    if [ -e "${GCC_DIR}/${f}" ]; then
+        cp -a "${GCC_DIR}/${f}" "${STAGE_DIR}${GCC_DIR}/"
+    fi
+done
+
+# Ensure libgcc_s.so.1 is present in /usr/lib/x86_64-linux-gnu as well
+if [ -e /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 ]; then
+    cp -a /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/"
+fi
+"""
+
+[install.inline]
+"etc/cargo/config.toml" = """[target.x86_64-unknown-linux-gnu]
+linker = "cc"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+"""

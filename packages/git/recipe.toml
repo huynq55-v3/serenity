@@ -1,0 +1,50 @@
+[package]
+name = "git"
+version = "2.48.0"
+arch = "x86_64-gnu"
+description = "Distributed version control system (with HTTPS clone/push support)"
+deps = []
+
+[source]
+type = "custom"
+script = """
+mkdir -p "${STAGE_DIR}/usr/bin" "${STAGE_DIR}/usr/lib/git-core"
+
+copy_with_deps() {
+    local bin="$1"
+    local dst="$2"
+    mkdir -p "$(dirname "${dst}")"
+    cp -L "${bin}" "${dst}"
+    chmod 0755 "${dst}"
+    ldd "${bin}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+        [ -f "${lib}" ] || continue
+        local ldst="${STAGE_DIR}${lib}"
+        mkdir -p "$(dirname "${ldst}")"
+        [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
+    done
+}
+
+copy_with_deps /usr/bin/git "${STAGE_DIR}/usr/bin/git"
+
+# Bundle HTTPS remote helper (required for `git clone https://...`)
+if [ -x /usr/lib/git-core/git-remote-http ]; then
+    copy_with_deps /usr/lib/git-core/git-remote-http "${STAGE_DIR}/usr/lib/git-core/git-remote-http"
+    ln -sf git-remote-http "${STAGE_DIR}/usr/lib/git-core/git-remote-https"
+    ln -sf git-remote-http "${STAGE_DIR}/usr/lib/git-core/git-remote-ftp"
+    ln -sf git-remote-http "${STAGE_DIR}/usr/lib/git-core/git-remote-ftps"
+fi
+
+# Bundle essential git-core helpers if present
+for helper in git-sh-i18n--envsubst git-daemon git-http-fetch git-http-push; do
+    if [ -x "/usr/lib/git-core/${helper}" ]; then
+        copy_with_deps "/usr/lib/git-core/${helper}" "${STAGE_DIR}/usr/lib/git-core/${helper}"
+    fi
+done
+"""
+
+[install.inline]
+"etc/gitconfig" = """[http]
+    sslCAInfo = /etc/ssl/certs/ca-certificates.crt
+[init]
+    defaultBranch = main
+"""
