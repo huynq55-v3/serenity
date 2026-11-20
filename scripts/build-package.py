@@ -148,6 +148,22 @@ def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
         "librt.so",
     )
 
+    def is_elf(p: Path) -> bool:
+        try:
+            with p.open("rb") as f:
+                return f.read(4) == b"\x7fELF"
+        except OSError:
+            return False
+
+    def collect_ldd_deps(p: Path) -> None:
+        proc = subprocess.run(["ldd", str(p)], capture_output=True, text=True)
+        for line in proc.stdout.splitlines():
+            for tok in line.split():
+                if tok.startswith("/") and (tok.startswith("/usr/lib") or tok.startswith("/lib")):
+                    dep = Path(tok)
+                    if dep.exists():
+                        copy_one(dep)
+
     def copy_one(p: Path) -> None:
         if not p.exists() and not p.is_symlink():
             return
@@ -170,13 +186,7 @@ def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
             if not dst.exists():
                 shutil.copy2(p, dst)
             # Recursively collect transitive shared library dependencies via ldd
-            proc = subprocess.run(["ldd", str(p)], capture_output=True, text=True)
-            for line in proc.stdout.splitlines():
-                for tok in line.split():
-                    if tok.startswith("/") and (tok.startswith("/usr/lib") or tok.startswith("/lib")):
-                        dep = Path(tok)
-                        if dep.exists():
-                            copy_one(dep)
+            collect_ldd_deps(p)
 
     matched = 0
     for libdir in search_dirs:
@@ -187,10 +197,10 @@ def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
                 copy_one(match)
                 matched += 1
 
-    print(f"  -> Collected {len(seen)} shared library file(s)/symlink(s) from {matched} pattern matches.")
-
-    # Optional extra host data files/dirs declared in [source] extra_paths = [...]
-    # (e.g. /usr/share/glib-2.0/schemas/gschemas.compiled for GTK3 file chooser dialogs)
+    # Optional extra host data files/dirs/helpers declared in [source] extra_paths = [...]
+    # (e.g. GSettings schemas, MIME database, glycin-loaders, gdk-pixbuf loaders, bwrap).
+    # Any ELF binary or .so inside extra_paths also gets its transitive ldd deps collected.
+    extra_elfs = 0
     for raw_path in src.get("extra_paths", []):
         p = Path(raw_path)
         if not p.exists():
@@ -200,9 +210,24 @@ def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
         if p.is_dir():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(p, dst, symlinks=True, dirs_exist_ok=True)
+            for root, _, files in os.walk(p):
+                for fname in files:
+                    item = Path(root) / fname
+                    if not item.is_symlink() and item.is_file() and is_elf(item):
+                        collect_ldd_deps(item)
+                        extra_elfs += 1
         elif p.is_file():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, dst)
+            resolved = p.resolve()
+            if resolved.is_file() and is_elf(resolved):
+                collect_ldd_deps(resolved)
+                extra_elfs += 1
+
+    print(
+        f"  -> Collected {len(seen)} shared library file(s)/symlink(s) from {matched} pattern matches"
+        f" (+ ldd deps for {extra_elfs} extra ELF file(s))."
+    )
 
     install_assets_and_inline(recipe, None, stage_dir)
 
