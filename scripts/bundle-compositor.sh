@@ -51,15 +51,35 @@ for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
             [ -e "$f" ] || continue
             mkdir -p "${TARGET_ROOT}${libdir}"
             cp -an "$f" "${TARGET_ROOT}${libdir}/" 2>/dev/null || true
+            [ -f "$f" ] && copy_lib_and_deps "$f"
         done
     done
+    # Mesa 25+ GBM backend (dri_gbm.so)
+    if [ -d "${libdir}/gbm" ]; then
+        mkdir -p "${TARGET_ROOT}${libdir}/gbm"
+        for f in "${libdir}/gbm/"*.so*; do
+            [ -e "$f" ] || continue
+            cp -an "$f" "${TARGET_ROOT}${libdir}/gbm/" 2>/dev/null || true
+            [ -f "$f" ] && copy_lib_and_deps "$f"
+        done
+    fi
+    # Mesa DRI drivers (Intel iris + QEMU virtio_gpu + libdril)
     if [ -d "${libdir}/dri" ]; then
         mkdir -p "${TARGET_ROOT}${libdir}/dri"
-        cp -an "${libdir}/dri/iris_dri.so" "${TARGET_ROOT}${libdir}/dri/" 2>/dev/null || true
-        cp -an "${libdir}/dri/virtio_gpu_dri.so" "${TARGET_ROOT}${libdir}/dri/" 2>/dev/null || true
-        cp -an "${libdir}/dri/libdril_dri.so" "${TARGET_ROOT}${libdir}/dri/" 2>/dev/null || true
+        for drv in iris_dri.so virtio_gpu_dri.so libdril_dri.so; do
+            f="${libdir}/dri/${drv}"
+            [ -e "$f" ] || continue
+            cp -an "$f" "${TARGET_ROOT}${libdir}/dri/" 2>/dev/null || true
+            [ -f "$f" ] && copy_lib_and_deps "$f"
+        done
     fi
 done
+
+# Bundle GLVND EGL vendor config (50_mesa.json) so libEGL discovers libEGL_mesa.so.0
+if [ -d /usr/share/glvnd/egl_vendor.d ]; then
+    mkdir -p "${TARGET_ROOT}/usr/share/glvnd"
+    cp -a /usr/share/glvnd/egl_vendor.d "${TARGET_ROOT}/usr/share/glvnd/"
+fi
 
 # Ensure /lib64 dynamic linker exists
 if [ -e /lib64/ld-linux-x86-64.so.2 ]; then
