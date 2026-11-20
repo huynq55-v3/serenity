@@ -1,6 +1,6 @@
 [package]
 name = "rust"
-version = "1.87.1"
+version = "1.87.0-r2"
 arch = "x86_64-gnu"
 description = "Rust compiler (rustc) + Cargo package manager (x86_64-unknown-linux-gnu) with self-contained clang/lld linker & CRT"
 deps = ["clibrary"]
@@ -8,7 +8,7 @@ deps = ["clibrary"]
 [source]
 type = "custom"
 script = """
-RUST_VER="${PKG_VERSION}"
+RUST_VER="${PKG_VERSION%%-*}"
 TARGET="x86_64-unknown-linux-gnu"
 BASE="https://static.rust-lang.org/dist"
 
