@@ -1,0 +1,54 @@
+[package]
+name = "antigravity"
+version = "2.33.0"
+arch = "x86_64-gnu"
+description = "Google Antigravity agentic AI IDE (Wayland native)"
+deps = ["clibrary"]
+
+[source]
+type = "custom"
+script = """
+URL="https://storage.googleapis.com/antigravity-public/antigravity-hub/2.33.0-4731201358004224/linux-x64/Antigravity.tar.gz"
+echo "  -> Downloading ${URL}..."
+curl -fsSL "${URL}" -o "${WORK_DIR}/Antigravity.tar.gz"
+
+mkdir -p "${STAGE_DIR}/opt/antigravity" "${STAGE_DIR}/usr/bin" \
+         "${STAGE_DIR}/usr/share/applications" \
+         "${STAGE_DIR}/usr/share/icons/hicolor/256x256/apps"
+
+tar -xzf "${WORK_DIR}/Antigravity.tar.gz" --strip-components=1 -C "${STAGE_DIR}/opt/antigravity"
+
+# Copy icon if bundled inside resources/
+ICON_SRC="$(find "${STAGE_DIR}/opt/antigravity/resources" -maxdepth 4 -iname "*antigravity*.png" -o -iname "icon*.png" 2>/dev/null | head -n 1 || true)"
+if [ -n "${ICON_SRC}" ] && [ -f "${ICON_SRC}" ]; then
+    cp "${ICON_SRC}" "${STAGE_DIR}/usr/share/icons/hicolor/256x256/apps/antigravity.png"
+fi
+"""
+
+[install.scripts]
+"usr/bin/antigravity" = """#!/bin/sh
+EXTRA_FLAGS=""
+for drv in /sys/class/drm/card*/device/driver; do
+    if [ -L "$drv" ]; then
+        case "$(readlink "$drv")" in
+            *virtio*) EXTRA_FLAGS="--disable-gpu --disable-gpu-compositing" ;;
+        esac
+    fi
+done
+exec /opt/antigravity/antigravity --ozone-platform-hint=auto --ozone-platform=wayland $EXTRA_FLAGS "$@"
+"""
+
+[install.inline]
+"usr/share/applications/antigravity.desktop" = """[Desktop Entry]
+Version=1.0
+Name=Antigravity
+GenericName=Agentic AI IDE
+Comment=Google Antigravity AI coding IDE
+Exec=/usr/bin/antigravity %F
+StartupNotify=true
+StartupWMClass=antigravity
+Terminal=false
+Icon=antigravity
+Type=Application
+Categories=Development;IDE;
+"""

@@ -1,0 +1,46 @@
+[package]
+name = "zed"
+version = "stable"
+arch = "x86_64-gnu"
+description = "Zed high-performance GPU-accelerated Rust IDE (with Wayland & Vulkan support)"
+deps = ["clibrary"]
+
+[source]
+type = "custom"
+script = """
+URL="https://cloud.zed.dev/releases/stable/latest/download?asset=zed&arch=x86_64&os=linux&source=docs"
+echo "  -> Downloading Zed IDE tarball..."
+curl -fsSL "${URL}" -o "${WORK_DIR}/zed.tar.gz"
+
+mkdir -p "${STAGE_DIR}/opt/zed" "${STAGE_DIR}/usr/bin" \
+         "${STAGE_DIR}/usr/share/applications" \
+         "${STAGE_DIR}/usr/share/icons/hicolor/512x512/apps"
+
+tar -xzf "${WORK_DIR}/zed.tar.gz" --strip-components=1 -C "${STAGE_DIR}/opt/zed"
+
+if [ -f "${STAGE_DIR}/opt/zed/share/icons/hicolor/512x512/apps/zed.png" ]; then
+    cp "${STAGE_DIR}/opt/zed/share/icons/hicolor/512x512/apps/zed.png" \
+       "${STAGE_DIR}/usr/share/icons/hicolor/512x512/apps/zed.png"
+fi
+"""
+
+[install.scripts]
+"usr/bin/zed" = """#!/bin/sh
+export LD_LIBRARY_PATH="/opt/zed/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /opt/zed/bin/zed "$@"
+"""
+
+[install.inline]
+"usr/share/applications/dev.zed.Zed.desktop" = """[Desktop Entry]
+Version=1.0
+Name=Zed
+GenericName=Text Editor
+Comment=A high-performance, multiplayer code editor
+Exec=/usr/bin/zed %U
+StartupNotify=true
+StartupWMClass=dev.zed.Zed
+Terminal=false
+Icon=zed
+Type=Application
+Categories=Utility;TextEditor;Development;IDE;
+"""

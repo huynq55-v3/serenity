@@ -88,7 +88,22 @@ for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
         done
         [ -f "${libdir}/dri/libdril_dri.so" ] && copy_lib_and_deps "${libdir}/dri/libdril_dri.so"
     fi
+    # Vulkan loader + Intel/Lavapipe/VirtIO ICD drivers (required by Zed IDE GPUI & modern Vulkan apps)
+    for vk in libvulkan.so.1 libvulkan_intel.so libvulkan_lvp.so libvulkan_virtio.so; do
+        if [ -e "${libdir}/${vk}" ]; then
+            mkdir -p "${TARGET_ROOT}${libdir}"
+            cp -an "${libdir}/${vk}"* "${TARGET_ROOT}${libdir}/" 2>/dev/null || true
+            [ -f "${libdir}/${vk}" ] && copy_lib_and_deps "${libdir}/${vk}"
+        fi
+    done
 done
+
+if [ -d /usr/share/vulkan/icd.d ]; then
+    mkdir -p "${TARGET_ROOT}/usr/share/vulkan/icd.d"
+    for icd in intel_icd.json lvp_icd.json virtio_icd.json; do
+        [ -f "/usr/share/vulkan/icd.d/${icd}" ] && cp -a "/usr/share/vulkan/icd.d/${icd}" "${TARGET_ROOT}/usr/share/vulkan/icd.d/"
+    done
+fi
 
 # Ensure /lib64 dynamic linker exists
 if [ -e /lib64/ld-linux-x86-64.so.2 ]; then
