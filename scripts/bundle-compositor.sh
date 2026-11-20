@@ -87,10 +87,15 @@ if [ -e /lib64/ld-linux-x86-64.so.2 ]; then
     cp -nL /lib64/ld-linux-x86-64.so.2 "${TARGET_ROOT}/lib64/"
 fi
 
-# Bundle XKB keymaps so xkbcommon works in Smithay
+# Bundle XKB keymaps (dereferencing /usr/share/X11/xkb -> ../xkeyboard-config-2) & locale
 if [ -d /usr/share/X11/xkb ]; then
     mkdir -p "${TARGET_ROOT}/usr/share/X11"
-    cp -a /usr/share/X11/xkb "${TARGET_ROOT}/usr/share/X11/"
+    rm -rf "${TARGET_ROOT}/usr/share/X11/xkb"
+    cp -aL /usr/share/X11/xkb "${TARGET_ROOT}/usr/share/X11/xkb"
+fi
+if [ -d /usr/share/X11/locale ]; then
+    mkdir -p "${TARGET_ROOT}/usr/share/X11"
+    cp -aL /usr/share/X11/locale "${TARGET_ROOT}/usr/share/X11/locale"
 fi
 
 echo "[bundle-compositor] Done! Inside Serenity, run 'start-desktop' to launch Smithay as UID 1000."

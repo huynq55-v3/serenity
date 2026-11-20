@@ -3,6 +3,7 @@ BUILD_DIR   := build
 KERNEL      ?= $(shell test -r $(BUILD_DIR)/bzImage && echo $(BUILD_DIR)/bzImage || echo /boot/vmlinuz_rust)
 INITRAMFS   := $(BUILD_DIR)/initramfs.cpio.gz
 DISK_IMG    := $(BUILD_DIR)/disk.img
+DISK_GUI    := $(BUILD_DIR)/disk-gui.img
 QEMU        := qemu-system-x86_64
 QEMU_MEM    ?= 512M
 QEMU_ACCEL  := $(shell test -r /dev/kvm -a -w /dev/kvm && echo "-enable-kvm -cpu host")
@@ -88,6 +89,14 @@ disk: init spkg nushell coreutils
 	@chmod +x scripts/build-rootfs.sh
 	@./scripts/build-rootfs.sh disk
 
+disk-gui: desktop-release
+	@chmod +x scripts/bundle-compositor.sh
+	@./scripts/bundle-compositor.sh $(BUILD_DIR)/rootfs-stage
+	@rm -f $(DISK_GUI)
+	@truncate -s 768M $(DISK_GUI)
+	@/usr/sbin/mke2fs -q -t ext4 -d $(BUILD_DIR)/rootfs-stage -L SERENITY -F $(DISK_GUI)
+	@echo "[rootfs] Built GUI ext4 disk: $(DISK_GUI) (768M)"
+
 initramfs: init spkg nushell coreutils
 	@chmod +x scripts/build-rootfs.sh
 	@./scripts/build-rootfs.sh initramfs
@@ -108,12 +117,12 @@ run: disk
 		-device virtio-net-pci,netdev=net0 \
 		-append "root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0 quiet loglevel=3"
 
-run-gui: disk
+run-gui: disk-gui
 	@test -r "$(KERNEL)" || (echo "ERROR: Kernel not found/readable at $(KERNEL)." && exit 1)
 	$(QEMU) \
 		$(QEMU_ACCEL) \
 		-kernel "$(KERNEL)" \
-		-drive "file=$(DISK_IMG),format=raw,if=virtio" \
+		-drive "file=$(DISK_GUI),format=raw,if=virtio" \
 		-m 1024M \
 		-device virtio-vga-gl \
 		-display gtk,gl=on \
