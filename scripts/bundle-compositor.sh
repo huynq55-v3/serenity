@@ -98,4 +98,10 @@ if [ -d /usr/share/X11/locale ]; then
     cp -aL /usr/share/X11/locale "${TARGET_ROOT}/usr/share/X11/locale"
 fi
 
+# Bundle DejaVu fallback fonts so all Wayland GUI apps render crisp text
+if [ -d /usr/share/fonts/truetype/dejavu ]; then
+    mkdir -p "${TARGET_ROOT}/usr/share/fonts/truetype"
+    cp -aL /usr/share/fonts/truetype/dejavu "${TARGET_ROOT}/usr/share/fonts/truetype/"
+fi
+
 echo "[bundle-compositor] Done! Inside Serenity, run 'start-desktop' to launch Smithay as UID 1000."

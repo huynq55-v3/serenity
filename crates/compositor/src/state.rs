@@ -199,10 +199,20 @@ impl XdgShellHandler for SerenityState {
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface.clone());
-        let offset = (self.space.elements().count() as i32) * 32;
-        self.space.map_element(window.clone(), (40 + offset, 40 + offset), true);
+        let output_size = self
+            .space
+            .outputs()
+            .next()
+            .and_then(|o| self.space.output_geometry(o))
+            .map(|g| g.size);
+
+        self.space.map_element(window.clone(), (0, 0), true);
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Activated);
+            state.states.set(xdg_toplevel::State::Maximized);
+            if let Some(size) = output_size {
+                state.size = Some(size);
+            }
         });
         surface.send_configure();
 
@@ -211,7 +221,7 @@ impl XdgShellHandler for SerenityState {
         if let Some(kb) = self.seat.get_keyboard() {
             kb.set_focus(self, Some(surface.wl_surface().clone()), serial);
         }
-        info!("Mapped new Wayland toplevel window");
+        info!("Mapped new maximized Wayland toplevel window ({:?})", output_size);
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}

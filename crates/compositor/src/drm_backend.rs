@@ -19,7 +19,13 @@ use smithay::{
         egl::{EGLContext, EGLDisplay},
         libinput::LibinputInputBackend,
         renderer::{
-            Color32F, ImportDma, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer,
+            Color32F, ImportDma,
+            element::{
+                Kind,
+                solid::{SolidColorBuffer, SolidColorRenderElement},
+                surface::WaylandSurfaceRenderElement,
+            },
+            gles::GlesRenderer,
         },
     },
     desktop::space::{SpaceRenderElements, space_render_elements},
@@ -30,7 +36,8 @@ use smithay::{
         input::{Libinput, LibinputInterface},
         wayland_server::Display,
     },
-    utils::{DeviceFd, Transform},
+    render_elements,
+    utils::{DeviceFd, Physical, Point, Transform},
 };
 use tracing::{error, info, warn};
 
@@ -43,10 +50,13 @@ struct DirectLibinputInterface;
 
 impl LibinputInterface for DirectLibinputInterface {
     fn open_restricted(&mut self, path: &Path, flags: i32) -> Result<OwnedFd, i32> {
+        let access = flags & libc::O_ACCMODE;
+        let read = access == libc::O_RDONLY || access == libc::O_RDWR;
+        let write = access == libc::O_WRONLY || access == libc::O_RDWR;
         OpenOptions::new()
-            .custom_flags(flags)
-            .read((flags & libc::O_RDONLY != 0) || (flags & libc::O_RDWR != 0))
-            .write((flags & libc::O_WRONLY != 0) || (flags & libc::O_RDWR != 0))
+            .custom_flags(flags & !libc::O_ACCMODE)
+            .read(read)
+            .write(write)
             .open(path)
             .map(Into::into)
             .map_err(|err| err.raw_os_error().unwrap_or(libc::EACCES))
@@ -55,6 +65,12 @@ impl LibinputInterface for DirectLibinputInterface {
     fn close_restricted(&mut self, fd: OwnedFd) {
         drop(fd);
     }
+}
+
+render_elements! {
+    pub DrmRenderElements<=GlesRenderer>;
+    Cursor=SolidColorRenderElement,
+    Space=SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>,
 }
 
 fn find_drm_card() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -292,8 +308,35 @@ fn render_drm_frame(
     output: &Output,
     bg_color: Color32F,
 ) {
-    let elements: Vec<SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>> =
+    let mut elements: Vec<DrmRenderElements> = Vec::new();
+
+    // Render crisp software cursor on top (front-to-back order in Smithay).
+    let cx = state.pointer_location.x.round() as i32;
+    let cy = state.pointer_location.y.round() as i32;
+    let cursor_inner = SolidColorBuffer::new((10, 10), Color32F::new(0.35, 0.90, 1.0, 1.0));
+    let cursor_border = SolidColorBuffer::new((14, 14), Color32F::new(0.05, 0.07, 0.12, 1.0));
+    elements.push(DrmRenderElements::Cursor(
+        SolidColorRenderElement::from_buffer(
+            &cursor_inner,
+            Point::<i32, Physical>::from((cx + 2, cy + 2)),
+            1.0,
+            1.0,
+            Kind::Cursor,
+        ),
+    ));
+    elements.push(DrmRenderElements::Cursor(
+        SolidColorRenderElement::from_buffer(
+            &cursor_border,
+            Point::<i32, Physical>::from((cx, cy)),
+            1.0,
+            1.0,
+            Kind::Cursor,
+        ),
+    ));
+
+    let space_elems: Vec<SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>> =
         space_render_elements(renderer, [&state.space], output, 1.0).unwrap_or_default();
+    elements.extend(space_elems.into_iter().map(DrmRenderElements::Space));
 
     if let Err(e) = drm_compositor.render_frame(renderer, &elements, bg_color, FrameFlags::DEFAULT) {
         warn!("DRM render_frame failed: {}", e);

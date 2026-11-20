@@ -4,7 +4,7 @@ mod wifi;
 use iced::widget::{
     button, column, container, horizontal_space, row, scrollable, text, text_input,
 };
-use iced::{Alignment, Element, Length, Size, Theme};
+use iced::{Alignment, Element, Font, Length, Size, Theme};
 
 use sysinfo::{SystemSnapshot, read_system_snapshot, run_shell_command};
 use wifi::{WifiNetwork, connect_network, detect_wifi_interface, scan_networks};
@@ -305,6 +305,8 @@ impl SerenityShell {
 fn main() -> iced::Result {
     iced::application(SerenityShell::title, SerenityShell::update, SerenityShell::view)
         .theme(|_| Theme::TokyoNight)
-        .window_size(Size::new(960.0, 560.0))
+        .default_font(Font::with_name("Fira Sans"))
+        .decorations(false)
+        .window_size(Size::new(1280.0, 720.0))
         .run()
 }

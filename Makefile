@@ -135,7 +135,8 @@ run-gui: disk-gui
 		-kernel "$(KERNEL)" \
 		-drive "file=$(DISK_GUI),format=raw,if=virtio" \
 		-m 1024M \
-		-device virtio-vga-gl \
+		-device virtio-vga-gl,xres=1280,yres=720 \
+		-device virtio-tablet-pci \
 		-display gtk,gl=on \
 		-no-reboot \
 		-netdev user,id=net0 \
