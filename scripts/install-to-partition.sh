@@ -140,6 +140,10 @@ else
     if [ -d /lib/firmware/i915 ]; then
         cp -a /lib/firmware/i915 "${MNT}/lib/firmware/"
     fi
+    if [ -d /lib/firmware/intel/iwlwifi ]; then
+        mkdir -p "${MNT}/lib/firmware/intel"
+        cp -a /lib/firmware/intel/iwlwifi "${MNT}/lib/firmware/intel/"
+    fi
     cp -a /lib/firmware/iwlwifi* "${MNT}/lib/firmware/" 2>/dev/null || true
     cp -a /lib/firmware/regulatory.db* "${MNT}/lib/firmware/" 2>/dev/null || true
 fi
