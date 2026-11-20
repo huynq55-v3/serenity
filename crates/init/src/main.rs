@@ -88,13 +88,6 @@ fn setup_filesystems() {
     // namespace sandbox enabled even on Ubuntu kernels that default apparmor_restrict_unprivileged_userns=1.
     let _ = fs::write("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "0\n");
     let _ = fs::write("/proc/sys/kernel/unprivileged_userns_clone", "1\n");
-    if Path::new("/opt/google/chrome/chrome-sandbox").exists() {
-        unsafe {
-            let p = b"/opt/google/chrome/chrome-sandbox\0".as_ptr() as *const libc::c_char;
-            libc::chown(p, 0, 0);
-            libc::chmod(p, 0o4755);
-        }
-    }
 }
 
 fn setup_hostname() {

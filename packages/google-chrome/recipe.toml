@@ -1,6 +1,6 @@
 [package]
 name = "google-chrome"
-version = "stable-r3"
+version = "stable-r4"
 arch = "x86_64-gnu"
 description = "Google Chrome web browser (repacked from official .deb, Wayland native + full sandbox)"
 deps = ["clibrary"]
@@ -10,12 +10,14 @@ type = "deb"
 url = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
 
 [install]
-# Strip Debian/Ubuntu apt & cron integration files not used on Serenity
+# Strip Debian/Ubuntu apt/cron files and duplicate X11 .desktop/symlink so Dock pinning always uses our Wayland wrapper
 remove = [
     "etc/cron.daily",
     "usr/share/menu",
     "usr/share/doc",
     "usr/share/man",
+    "usr/share/applications/com.google.Chrome.desktop",
+    "usr/bin/google-chrome-stable",
 ]
 
 [install.assets]
@@ -35,6 +37,9 @@ for drv in /sys/class/drm/card*/device/driver; do
     fi
 done
 exec /opt/google/chrome/chrome --ozone-platform-hint=auto --ozone-platform=wayland $EXTRA_FLAGS "$@"
+"""
+"usr/bin/google-chrome-stable" = """#!/bin/sh
+exec /usr/bin/google-chrome "$@"
 """
 
 [install.inline]
