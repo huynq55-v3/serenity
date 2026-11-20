@@ -1,6 +1,6 @@
 [package]
 name = "screenshot"
-version = "1.1.1"
+version = "1.1.2"
 arch = "x86_64-gnu"
 description = "Wayland screenshot toolkit (grim with ext-image-copy-capture-v1 for COSMIC + slurp + wl-clipboard)"
 deps = []
@@ -86,7 +86,7 @@ if [ "$MODE" = "region" ]; then
             kill "${p#/proc/}" 2>/dev/null || true
         fi
     done
-    GEOM="$(slurp -d -x -b '#00000066' -c '#4fc3f7ff' -s '#4fc3f722' -w 2)" || exit 1
+    GEOM="$(slurp -d -x -b '#00000066' -c '#4fc3f7ff' -s '#4fc3f722' -w 2 </dev/null)" || exit 1
     grim -g "$GEOM" "$OUT_FILE"
 else
     grim "$OUT_FILE"
