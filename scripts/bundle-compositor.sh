@@ -95,12 +95,31 @@ if [ -e /lib64/ld-linux-x86-64.so.2 ]; then
     cp -nL /lib64/ld-linux-x86-64.so.2 "${TARGET_ROOT}/lib64/"
 fi
 
-# Bundle D-Bus session daemon & seatd (so non-root COSMIC Desktop works without systemd)
-for sys_bin in /usr/bin/dbus-daemon /usr/bin/dbus-run-session /usr/sbin/seatd /usr/bin/seatd; do
+# Bundle D-Bus daemon, seatd, NetworkManager, wpa_supplicant, nmcli, cosmic-settings & cosmic-randr
+for sys_bin in \
+    /usr/bin/dbus-daemon /usr/bin/dbus-run-session \
+    /usr/sbin/seatd /usr/bin/seatd \
+    /usr/sbin/NetworkManager /usr/sbin/wpa_supplicant /usr/bin/nmcli \
+    /usr/bin/cosmic-settings /usr/bin/cosmic-randr; do
     if [ -x "${sys_bin}" ]; then
         install -m 0755 "${sys_bin}" "${TARGET_ROOT}/usr/bin/$(basename "${sys_bin}")"
         copy_lib_and_deps "${sys_bin}"
     fi
 done
+
+# Bundle NetworkManager Wi-Fi device plugin so NetworkManager can scan & connect wlan0
+for nm_ver_dir in /usr/lib/x86_64-linux-gnu/NetworkManager/*; do
+    if [ -d "${nm_ver_dir}" ] && [ -f "${nm_ver_dir}/libnm-device-plugin-wifi.so" ]; then
+        mkdir -p "${TARGET_ROOT}${nm_ver_dir}"
+        cp -nL "${nm_ver_dir}/libnm-device-plugin-wifi.so" "${TARGET_ROOT}${nm_ver_dir}/" 2>/dev/null || true
+        copy_lib_and_deps "${nm_ver_dir}/libnm-device-plugin-wifi.so"
+    fi
+done
+
+# Bundle serenity-sysd (Rust System D-Bus daemon for login1 SetBrightness/PowerOff + UPower)
+SYSD_BIN="${ROOT_DIR}/target/x86_64-unknown-linux-musl/release/serenity-sysd"
+if [ -x "${SYSD_BIN}" ]; then
+    install -m 0755 "${SYSD_BIN}" "${TARGET_ROOT}/usr/bin/serenity-sysd"
+fi
 
 echo "[bundle-compositor] Done! Inside Serenity, run 'start-desktop' to launch Desktop as UID 1000."

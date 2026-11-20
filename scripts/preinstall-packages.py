@@ -122,10 +122,17 @@ def main() -> int:
             if p and not p.endswith("/"):
                 files.append("/" + p)
 
+        # Keep Serenity's curated favorites file (Alacritty + CosmicSettings) intact
+        fav_path = rootfs / "usr/share/cosmic/com.system76.CosmicAppList/v1/favorites"
+        saved_fav = fav_path.read_text(encoding="utf-8") if fav_path.exists() else None
+
         subprocess.run(
             ["tar", "--zstd", "-xf", str(archive), "-C", str(rootfs)],
             check=True,
         )
+
+        if saved_fav is not None:
+            fav_path.write_text(saved_fav, encoding="utf-8")
 
         installed["packages"][name] = {
             "version": entry["version"],
@@ -140,6 +147,7 @@ def main() -> int:
     if (usr_bin / "cosmic-applets").exists():
         for applet in [
             "cosmic-app-list",
+            "cosmic-applet-battery",
             "cosmic-applet-time",
             "cosmic-applet-power",
             "cosmic-applet-network",

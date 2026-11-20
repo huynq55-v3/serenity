@@ -67,7 +67,10 @@ shell-ui:
 alacritty:
 	cargo install alacritty --root $(BUILD_DIR)/userland --locked
 
-desktop-release: disk
+sysd:
+	cargo build --release --target $(TARGET_MUSL) -p serenity-sysd
+
+desktop-release: disk sysd
 	cargo build --release -p serenity-compositor -p serenity-shell
 
 run-compositor: compositor

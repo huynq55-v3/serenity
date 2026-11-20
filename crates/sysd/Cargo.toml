@@ -1,0 +1,13 @@
+[package]
+name = "serenity-sysd"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "serenity-sysd"
+path = "src/main.rs"
+
+[dependencies]
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "signal"] }
+libc = "0.2"

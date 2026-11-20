@@ -1,0 +1,16 @@
+[package]
+name = "cosmic-settings"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC Desktop Settings GUI (Displays, Appearance, Input, Network, Sound, Power)"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-settings.git"
+
+[install]
+files = { "cosmic-settings" = "usr/bin/cosmic-settings" }
+
+[install.assets]
+"resources/com.system76.CosmicSettings.desktop" = "usr/share/applications/com.system76.CosmicSettings.desktop"

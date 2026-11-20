@@ -281,6 +281,7 @@ fn handle_multicall_applet() -> bool {
             if Path::new("/usr/bin/cosmic-applets").exists() {
                 for applet in [
                     "cosmic-app-list",
+                    "cosmic-applet-battery",
                     "cosmic-applet-time",
                     "cosmic-applet-power",
                     "cosmic-applet-network",
@@ -293,6 +294,66 @@ fn handle_multicall_applet() -> bool {
                         let _ = std::os::unix::fs::symlink("cosmic-applets", &link);
                     }
                 }
+            }
+
+            // Start System D-Bus (/run/dbus/system_bus_socket & /var/run/dbus/system_bus_socket)
+            // + serenity-sysd (login1 SetBrightness/PowerOff + UPower)
+            // + wpa_supplicant + NetworkManager (so cosmic-applet-network lists & connects Wi-Fi)
+            let _ = fs::create_dir_all("/run/dbus");
+            let _ = fs::create_dir_all("/var");
+            if !Path::new("/var/run").exists() {
+                let _ = std::os::unix::fs::symlink("/run", "/var/run");
+            }
+            if Path::new("/usr/bin/dbus-daemon").exists()
+                && !Path::new("/run/dbus/system_bus_socket").exists()
+            {
+                println!("[serenity] Starting System D-Bus daemon...");
+                let _ = Command::new("/usr/bin/dbus-daemon")
+                    .args(["--system", "--fork", "--nopidfile"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                for _ in 0..20 {
+                    if Path::new("/run/dbus/system_bus_socket").exists() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+            if Path::new("/usr/bin/serenity-sysd").exists()
+                && Path::new("/run/dbus/system_bus_socket").exists()
+            {
+                println!("[serenity] Starting serenity-sysd (login1 + UPower)...");
+                let _ = Command::new("/usr/bin/serenity-sysd")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
+            if Path::new("/usr/bin/wpa_supplicant").exists()
+                && Path::new("/run/dbus/system_bus_socket").exists()
+            {
+                let _ = fs::create_dir_all("/run/wpa_supplicant");
+                let _ = Command::new("/usr/bin/wpa_supplicant")
+                    .args(["-u", "-s", "-O", "/run/wpa_supplicant"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
+            if Path::new("/usr/bin/NetworkManager").exists()
+                && Path::new("/run/dbus/system_bus_socket").exists()
+            {
+                println!("[serenity] Starting NetworkManager (Wi-Fi & Ethernet)...");
+                let _ = fs::create_dir_all("/var/lib/NetworkManager");
+                let _ = fs::create_dir_all("/etc/NetworkManager/system-connections");
+                let _ = Command::new("/usr/bin/NetworkManager")
+                    .args(["--no-daemon"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
             }
 
             // Start seatd (as root) before dropping privileges so non-root Wayland compositors
@@ -411,6 +472,19 @@ fn setup_desktop_permissions() {
                         libc::chown(c_path.as_ptr(), 0, gid);
                         libc::chmod(c_path.as_ptr(), 0o660);
                     }
+                }
+            }
+        }
+    }
+
+    // Grant video group (gid 44) write access to /sys/class/backlight/*/brightness as fallback
+    if let Ok(entries) = fs::read_dir("/sys/class/backlight") {
+        for entry in entries.flatten() {
+            let b_path = entry.path().join("brightness");
+            if let Ok(c_path) = CString::new(b_path.to_string_lossy().as_bytes()) {
+                unsafe {
+                    libc::chown(c_path.as_ptr(), 0, 44);
+                    libc::chmod(c_path.as_ptr(), 0o664);
                 }
             }
         }
