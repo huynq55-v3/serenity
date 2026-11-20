@@ -330,6 +330,9 @@ fn handle_multicall_applet() -> bool {
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .spawn();
+                // Brief settle so org.freedesktop.login1 & org.freedesktop.UPower register on D-Bus
+                // before cosmic-settings-daemon and cosmic-applet-battery connect.
+                thread::sleep(Duration::from_millis(250));
             }
             if Path::new("/usr/bin/wpa_supplicant").exists()
                 && Path::new("/run/dbus/system_bus_socket").exists()
@@ -478,14 +481,24 @@ fn setup_desktop_permissions() {
     }
 
     // Grant video group (gid 44) write access to /sys/class/backlight/*/brightness as fallback
+    // and tag backlight devices in /run/udev/data/+backlight:<name> so libudev / cosmic-settings-daemon
+    // discovers intel_backlight without running systemd-udevd.
     if let Ok(entries) = fs::read_dir("/sys/class/backlight") {
         for entry in entries.flatten() {
+            let name = entry.file_name();
             let b_path = entry.path().join("brightness");
             if let Ok(c_path) = CString::new(b_path.to_string_lossy().as_bytes()) {
                 unsafe {
                     libc::chown(c_path.as_ptr(), 0, 44);
                     libc::chmod(c_path.as_ptr(), 0o664);
                 }
+            }
+            if let Some(name_str) = name.to_str() {
+                let udev_data = format!(
+                    "E:ID_SEAT=seat0\nE:ID_FOR_SEAT=backlight-{}\nG:seat\n",
+                    name_str
+                );
+                let _ = fs::write(format!("/run/udev/data/+backlight:{}", name_str), udev_data);
             }
         }
     }
