@@ -119,6 +119,16 @@ if [ -x /usr/bin/dash ]; then
     ln -sf /bin/sh "${TARGET_ROOT}/usr/bin/sh"
 fi
 
+# Bundle GNU Bash (/bin/bash + /usr/bin/bash) for IDEs (Antigravity, VS Code),
+# build scripts, and developer tools that invoke `bash`
+BASH_BIN="$(command -v bash || true)"
+if [ -n "${BASH_BIN}" ] && [ -x "${BASH_BIN}" ]; then
+    mkdir -p "${TARGET_ROOT}/bin" "${TARGET_ROOT}/usr/bin"
+    install -m 0755 "${BASH_BIN}" "${TARGET_ROOT}/bin/bash"
+    ln -sf /bin/bash "${TARGET_ROOT}/usr/bin/bash"
+    copy_lib_and_deps "${BASH_BIN}"
+fi
+
 # Bundle D-Bus daemon, seatd, NetworkManager, wpa_supplicant, nmcli, cosmic-settings, cosmic-randr & pop-launcher
 for sys_bin in \
     /usr/bin/dbus-daemon /usr/bin/dbus-run-session \

@@ -1,0 +1,27 @@
+[package]
+name = "bash"
+version = "5.2"
+arch = "x86_64-gnu"
+description = "GNU Bourne-Again SHell (/bin/bash + /usr/bin/bash) for scripts, build tools & IDEs"
+deps = []
+
+[source]
+type = "custom"
+script = """
+BASH_BIN="$(command -v bash)"
+mkdir -p "${STAGE_DIR}/bin" "${STAGE_DIR}/usr/bin"
+
+cp -L "${BASH_BIN}" "${STAGE_DIR}/bin/bash"
+chmod 0755 "${STAGE_DIR}/bin/bash"
+ln -sf /bin/bash "${STAGE_DIR}/usr/bin/bash"
+
+ldd "${BASH_BIN}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+    [ -f "${lib}" ] || continue
+    case "$(basename "${lib}")" in
+        ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
+    esac
+    ldst="${STAGE_DIR}${lib}"
+    mkdir -p "$(dirname "${ldst}")"
+    [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
+done
+"""
