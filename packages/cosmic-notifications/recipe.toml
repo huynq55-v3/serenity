@@ -1,0 +1,13 @@
+[package]
+name = "cosmic-notifications"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC notifications daemon (required by cosmic-session)"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-notifications.git"
+
+[install]
+files = { "cosmic-notifications" = "usr/bin/cosmic-notifications" }
