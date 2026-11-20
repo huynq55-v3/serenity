@@ -58,6 +58,7 @@ for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
     [ -d "${libdir}" ] || continue
     for pat in \
         "libEGL*.so*" "libGLESv2*.so*" "libGLdispatch*.so*" "libgbm*.so*" "libgallium*.so*" "libLLVM*.so*" \
+        "libwayland-*.so*" "libxkb*.so*" \
         "libdisplay-info*.so*" "libseat*.so*" "libpixman-1*.so*" "libdav1d*.so*" \
         "libfontconfig*.so*" "libfreetype*.so*" "libsystemd*.so*" \
         "libpipewire-0.3*.so*" "libpulse*.so*"; do
@@ -77,15 +78,14 @@ for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
             [ -f "$f" ] && copy_lib_and_deps "$f"
         done
     fi
-    # Mesa DRI drivers (Intel iris + QEMU virtio_gpu + libdril)
+    # Mesa DRI drivers (copy libdril_dri.so + all *_dri.so symlinks including swrast_dri.so, kms_swrast_dri.so, iris_dri.so, virtio_gpu_dri.so)
     if [ -d "${libdir}/dri" ]; then
         mkdir -p "${TARGET_ROOT}${libdir}/dri"
-        for drv in iris_dri.so virtio_gpu_dri.so libdril_dri.so; do
-            f="${libdir}/dri/${drv}"
+        for f in "${libdir}/dri/"*_dri.so*; do
             [ -e "$f" ] || continue
-            cp -an "$f" "${TARGET_ROOT}${libdir}/dri/" 2>/dev/null || true
-            [ -f "$f" ] && copy_lib_and_deps "$f"
+            cp -a "$f" "${TARGET_ROOT}${libdir}/dri/" 2>/dev/null || true
         done
+        [ -f "${libdir}/dri/libdril_dri.so" ] && copy_lib_and_deps "${libdir}/dri/libdril_dri.so"
     fi
 done
 

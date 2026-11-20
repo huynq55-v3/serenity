@@ -139,6 +139,7 @@ fn cmd_install(targets: &[String]) -> Result<(), String> {
             files.len()
         );
     }
+    let _ = std::process::Command::new("/bin/sync").status();
     Ok(())
 }
 

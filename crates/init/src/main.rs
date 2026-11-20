@@ -270,6 +270,10 @@ fn handle_multicall_applet() -> bool {
                 std::env::set_var("HOME", "/home/serenity");
                 std::env::set_var("USER", "serenity");
                 std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+                std::env::set_var("XDG_CONFIG_HOME", "/home/serenity/.config");
+                std::env::set_var("XDG_CACHE_HOME", "/home/serenity/.cache");
+                std::env::set_var("XDG_DATA_HOME", "/home/serenity/.local/share");
+                std::env::set_var("XDG_STATE_HOME", "/home/serenity/.local/state");
                 std::env::set_var("XDG_SESSION_TYPE", "wayland");
                 std::env::set_var("XDG_DATA_DIRS", "/usr/local/share:/usr/share");
                 std::env::set_var("XDG_CONFIG_DIRS", "/etc/xdg:/usr/share");

@@ -140,7 +140,8 @@ run-gui: $(DISK_GUI)
 		$(QEMU_ACCEL) \
 		-kernel "$(KERNEL)" \
 		-drive "file=$(DISK_GUI),format=raw,if=virtio" \
-		-m 1024M \
+		-m 2048M \
+		-smp 2 \
 		-device virtio-vga-gl,xres=1920,yres=1080 \
 		-device virtio-tablet-pci \
 		-device virtio-keyboard-pci \
