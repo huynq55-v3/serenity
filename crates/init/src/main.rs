@@ -497,6 +497,42 @@ fn main() {
 
     print_banner(net_status.as_deref(), kmods_loaded);
 
+    // Auto-launch COSMIC Desktop immediately on graphical boot (bare metal or QEMU GUI)
+    // when a DRM GPU is present, cosmic-session is installed, and we are not on serial console.
+    let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
+    let is_serial = cmdline.contains("console=ttyS0");
+    let disable_autostart = cmdline.contains("serenity.nogui");
+    if !is_serial
+        && !disable_autostart
+        && detect_drm_card().is_some()
+        && Path::new("/usr/bin/cosmic-session").exists()
+    {
+        println!("[init] Auto-starting COSMIC Desktop (pass 'serenity.nogui' on kernel cmdline to stay in TTY)...");
+        if let Ok(mut desktop) = Command::new("/usr/bin/start-desktop").spawn() {
+            let desktop_pid = desktop.id() as libc::pid_t;
+            loop {
+                check_pending_power_action();
+                let mut status: libc::c_int = 0;
+                let waited = unsafe { libc::waitpid(-1, &mut status, 0) };
+                check_pending_power_action();
+                if waited == desktop_pid {
+                    let _ = desktop.try_wait();
+                    break;
+                }
+                if waited < 0 {
+                    let err = io::Error::last_os_error();
+                    if err.raw_os_error() == Some(libc::EINTR) {
+                        continue;
+                    }
+                    break;
+                }
+                reap_zombies();
+            }
+            check_pending_power_action();
+            println!("\n[init] COSMIC Desktop exited. Falling back to Nushell...");
+        }
+    }
+
     // PID 1 must never exit; exiting causes a Linux kernel panic.
     loop {
         check_pending_power_action();

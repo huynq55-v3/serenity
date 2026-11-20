@@ -93,8 +93,9 @@ disk: init spkg nushell coreutils
 	@./scripts/build-rootfs.sh disk
 
 disk-gui: desktop-release
-	@chmod +x scripts/bundle-compositor.sh
+	@chmod +x scripts/bundle-compositor.sh scripts/preinstall-packages.py
 	@./scripts/bundle-compositor.sh $(BUILD_DIR)/rootfs-stage
+	@python3 scripts/preinstall-packages.py $(BUILD_DIR)/rootfs-stage alacritty cosmic-desktop
 	@mkdir -p $(BUILD_DIR)/rootfs-stage/lib/modules/serenity $(BUILD_DIR)/rootfs-stage/etc/serenity
 	@KVER=$$(uname -r); \
 	: > $(BUILD_DIR)/rootfs-stage/etc/serenity/modules.load; \
