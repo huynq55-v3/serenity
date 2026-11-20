@@ -92,6 +92,17 @@ disk: init spkg nushell coreutils
 disk-gui: desktop-release
 	@chmod +x scripts/bundle-compositor.sh
 	@./scripts/bundle-compositor.sh $(BUILD_DIR)/rootfs-stage
+	@mkdir -p $(BUILD_DIR)/rootfs-stage/lib/modules/serenity $(BUILD_DIR)/rootfs-stage/etc/serenity
+	@KVER=$$(uname -r); \
+	: > $(BUILD_DIR)/rootfs-stage/etc/serenity/modules.load; \
+	for m in virtio_gpu; do \
+		modprobe -S "$$KVER" --show-depends "$$m" 2>/dev/null | awk '$$1=="insmod"{print $$2}' | while read -r p; do \
+			[ -f "$$p" ] || continue; \
+			base=$$(basename "$$p" .zst); \
+			zstd -dq -c "$$p" > "$(BUILD_DIR)/rootfs-stage/lib/modules/serenity/$$base" 2>/dev/null || cp "$$p" "$(BUILD_DIR)/rootfs-stage/lib/modules/serenity/$$base"; \
+			echo "/lib/modules/serenity/$$base" >> $(BUILD_DIR)/rootfs-stage/etc/serenity/modules.load; \
+		done; \
+	done
 	@rm -f $(DISK_GUI)
 	@truncate -s 768M $(DISK_GUI)
 	@/usr/sbin/mke2fs -q -t ext4 -d $(BUILD_DIR)/rootfs-stage -L SERENITY -F $(DISK_GUI)
@@ -121,6 +132,7 @@ run-gui: disk-gui
 	@test -r "$(KERNEL)" || (echo "ERROR: Kernel not found/readable at $(KERNEL)." && exit 1)
 	$(QEMU) \
 		$(QEMU_ACCEL) \
+		-bios /usr/share/OVMF/OVMF_CODE_4M.fd \
 		-kernel "$(KERNEL)" \
 		-drive "file=$(DISK_GUI),format=raw,if=virtio" \
 		-m 1024M \
