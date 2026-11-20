@@ -1,0 +1,16 @@
+[package]
+name = "cosmic-app-library"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC Application Library (auto-discovers /usr/share/applications/*.desktop)"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-app-library.git"
+
+[install]
+files = { "cosmic-app-library" = "usr/bin/cosmic-app-library" }
+
+[install.assets]
+"data/com.system76.CosmicAppLibrary.desktop" = "usr/share/applications/com.system76.CosmicAppLibrary.desktop"

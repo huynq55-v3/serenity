@@ -1,0 +1,13 @@
+[package]
+name = "cosmic-comp"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC Wayland Compositor (Rust + Smithay)"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-comp.git"
+
+[install]
+files = { "cosmic-comp" = "usr/bin/cosmic-comp" }

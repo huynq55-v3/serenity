@@ -1,0 +1,25 @@
+[package]
+name = "cosmic-desktop"
+version = "0.1.0"
+arch = "any"
+description = "Full Serenity COSMIC Desktop meta-package (Smithay + Dock + Launcher + Alacritty)"
+deps = [
+    "cosmic-comp",
+    "cosmic-panel",
+    "cosmic-bg",
+    "cosmic-launcher",
+    "cosmic-app-library",
+    "cosmic-session",
+    "alacritty",
+]
+
+[source]
+type = "meta"
+
+[install.inline]
+# Pin Alacritty & App Library onto the COSMIC Dock by default
+"usr/share/cosmic/com.system76.CosmicAppList/v1/favorites" = """[
+    "com.system76.CosmicAppLibrary",
+    "Alacritty",
+]
+"""

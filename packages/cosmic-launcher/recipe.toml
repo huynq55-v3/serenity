@@ -1,0 +1,16 @@
+[package]
+name = "cosmic-launcher"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC Spotlight-style application launcher"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-launcher.git"
+
+[install]
+files = { "cosmic-launcher" = "usr/bin/cosmic-launcher" }
+
+[install.assets]
+"data/com.system76.CosmicLauncher.desktop" = "usr/share/applications/com.system76.CosmicLauncher.desktop"

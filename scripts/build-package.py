@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Serenity Linux Package Factory.
 
-Reads packages/*/recipe.toml, builds/repacks static x86_64-musl binaries into
-native Serenity `.tar.zst` archives, computes SHA-256 checksums, and emits
+Reads packages/*/recipe.toml, builds/repacks binaries + XDG desktop entries & icons
+into native Serenity `.tar.zst` archives, computes SHA-256 checksums, and emits
 `index.json` ready for GitHub Releases + `spkg`.
+
+Supported source types:
+  - prebuilt  : downloads an upstream musl tarball and repacks selected files
+  - cargo     : clones a Rust repo and builds static x86_64-unknown-linux-musl
+  - cargo-gnu : clones a Rust GUI/Wayland repo (e.g. COSMIC, Alacritty) and builds native x86_64-gnu
+  - meta      : dependency-only / config-only meta-package (e.g. cosmic-desktop)
 """
 import argparse
 import hashlib
@@ -33,9 +39,33 @@ def sha256_file(path: Path) -> str:
 
 def download(url: str, dest: Path) -> None:
     print(f"  -> Downloading {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": "serenity-pkg-factory/0.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "serenity-pkg-factory/0.2"})
     with urllib.request.urlopen(req) as resp, dest.open("wb") as out:
         shutil.copyfileobj(resp, out)
+
+
+def install_assets_and_inline(recipe: dict, src_dir: Path | None, stage_dir: Path) -> None:
+    install_cfg = recipe.get("install", {})
+
+    # Copy extra assets from source repo (e.g. .desktop files, SVG icons, configs)
+    if src_dir is not None:
+        for rel_src, dst_rel in install_cfg.get("assets", {}).items():
+            src_path = src_dir / rel_src
+            dst_path = stage_dir / dst_rel.lstrip("/")
+            if src_path.is_dir():
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+            elif src_path.is_file():
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_path, dst_path)
+            else:
+                print(f"  -> WARN: optional asset not found in repo: {rel_src}")
+
+    # Write inline text files declared in [install.inline] (e.g. default COSMIC Dock favorites)
+    for dst_rel, content in install_cfg.get("inline", {}).items():
+        dst_path = stage_dir / dst_rel.lstrip("/")
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        dst_path.write_text(content, encoding="utf-8")
 
 
 def stage_prebuilt(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
@@ -57,7 +87,7 @@ def stage_prebuilt(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
     with tarfile.open(archive_path, "r:*") as tf:
         tf.extractall(extract_dir, filter="data")
 
-    file_map: dict[str, str] = recipe["install"]["files"]
+    file_map: dict[str, str] = recipe.get("install", {}).get("files", {})
     installed = 0
     for root, _, files in os.walk(extract_dir):
         for fname in files:
@@ -75,11 +105,13 @@ def stage_prebuilt(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
             f"Expected {len(file_map)} file(s) from {url}, found {installed}"
         )
 
+    install_assets_and_inline(recipe, extract_dir, stage_dir)
 
-def stage_cargo(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
+
+def stage_cargo(recipe: dict, stage_dir: Path, work_dir: Path, musl: bool) -> None:
     src = recipe["source"]
     repo_url = src["git"]
-    rev = src.get("rev") or src.get("tag")
+    rev = src.get("rev") or src.get("tag") or src.get("branch")
     src_dir = work_dir / "src"
 
     cmd = ["git", "clone", "--depth", "1"]
@@ -89,14 +121,30 @@ def stage_cargo(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
     subprocess.run(cmd, check=True)
 
     env = os.environ.copy()
-    env.setdefault("CC_x86_64_unknown_linux_musl", "clang")
-    build_cmd = ["cargo", "build", "--release", "--target", "x86_64-unknown-linux-musl"]
-    if src.get("features"):
-        build_cmd += ["--features", ",".join(src["features"])]
-    subprocess.run(build_cmd, cwd=src_dir, env=env, check=True)
+    if musl:
+        env.setdefault("CC_x86_64_unknown_linux_musl", "clang")
 
-    target_dir = src_dir / "target" / "x86_64-unknown-linux-musl" / "release"
-    for bin_name, dst_rel in recipe["install"]["files"].items():
+    # Allow custom build command (e.g. `just build-release`) or standard cargo build
+    custom_build = src.get("build_cmd")
+    if custom_build:
+        subprocess.run(custom_build, shell=True, cwd=src_dir, env=env, check=True)
+        target_dir = src_dir / "target" / "release"
+    else:
+        build_cmd = ["cargo", "build", "--release"]
+        if musl:
+            build_cmd += ["--target", "x86_64-unknown-linux-musl"]
+        if src.get("package"):
+            build_cmd += ["-p", src["package"]]
+        if src.get("features"):
+            build_cmd += ["--features", ",".join(src["features"])]
+        subprocess.run(build_cmd, cwd=src_dir, env=env, check=True)
+        target_dir = (
+            src_dir / "target" / "x86_64-unknown-linux-musl" / "release"
+            if musl
+            else src_dir / "target" / "release"
+        )
+
+    for bin_name, dst_rel in recipe.get("install", {}).get("files", {}).items():
         bin_path = target_dir / bin_name
         if not bin_path.is_file():
             raise RuntimeError(f"Built binary not found: {bin_path}")
@@ -105,14 +153,30 @@ def stage_cargo(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
         shutil.copy2(bin_path, dst_file)
         os.chmod(dst_file, 0o755)
 
+    install_assets_and_inline(recipe, src_dir, stage_dir)
+
 
 def pack_tar_zst(stage_dir: Path, out_file: Path) -> None:
     tar_tmp = out_file.with_suffix("")  # .tar
     subprocess.run(
-        ["tar", "--sort=name", "--owner=0", "--group=0", "--numeric-owner", "-cf", str(tar_tmp), "-C", str(stage_dir), "."],
+        [
+            "tar",
+            "--sort=name",
+            "--owner=0",
+            "--group=0",
+            "--numeric-owner",
+            "-cf",
+            str(tar_tmp),
+            "-C",
+            str(stage_dir),
+            ".",
+        ],
         check=True,
     )
-    subprocess.run(["zstd", "-19", "--force", "--rm", str(tar_tmp), "-o", str(out_file)], check=True)
+    subprocess.run(
+        ["zstd", "-19", "--force", "--rm", str(tar_tmp), "-o", str(out_file)],
+        check=True,
+    )
 
 
 def build_recipe(recipe_path: Path, out_dir: Path, base_url: str) -> tuple[str, dict]:
@@ -136,7 +200,11 @@ def build_recipe(recipe_path: Path, out_dir: Path, base_url: str) -> tuple[str, 
         if src_type == "prebuilt":
             stage_prebuilt(recipe, stage_dir, work_dir)
         elif src_type == "cargo":
-            stage_cargo(recipe, stage_dir, work_dir)
+            stage_cargo(recipe, stage_dir, work_dir, musl=True)
+        elif src_type == "cargo-gnu":
+            stage_cargo(recipe, stage_dir, work_dir, musl=False)
+        elif src_type == "meta":
+            install_assets_and_inline(recipe, None, stage_dir)
         else:
             raise RuntimeError(f"Unsupported source type: {src_type}")
 
@@ -157,12 +225,21 @@ def build_recipe(recipe_path: Path, out_dir: Path, base_url: str) -> tuple[str, 
     return name, meta
 
 
+def merge_meta_files(meta_dir: Path, out_index: Path) -> None:
+    index = {"version": 1, "packages": {}}
+    for meta_file in sorted(meta_dir.glob("*.meta.json")):
+        data = json.loads(meta_file.read_text(encoding="utf-8"))
+        index["packages"][data["name"]] = data["meta"]
+    out_index.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+    print(f"[factory] Merged {len(index['packages'])} package(s) into {out_index}.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build Serenity .tar.zst packages and index.json")
     parser.add_argument(
         "--base-url",
         default=f"file://{OUT_DIR}",
-        help="Base URL where built .tar.zst files will be hosted (e.g. GitHub Releases download URL)",
+        help="Base URL where built .tar.zst files will be hosted (e.g. GitHub Releases URL)",
     )
     parser.add_argument(
         "--out-dir",
@@ -171,13 +248,28 @@ def main() -> int:
         help="Output directory for .tar.zst files and index.json",
     )
     parser.add_argument(
+        "--write-meta",
+        action="store_true",
+        help="Write per-package <name>.meta.json files (for parallel CI matrix merge)",
+    )
+    parser.add_argument(
+        "--merge-meta-dir",
+        type=Path,
+        default=None,
+        help="Merge all *.meta.json in this directory into <out-dir>/index.json and exit",
+    )
+    parser.add_argument(
         "packages",
         nargs="*",
         help="Optional specific package names to build (default: all in packages/)",
     )
     args = parser.parse_args()
-
     args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.merge_meta_dir is not None:
+        merge_meta_files(args.merge_meta_dir, args.out_dir / "index.json")
+        return 0
+
     if args.packages:
         recipes = [PACKAGES_DIR / p / "recipe.toml" for p in args.packages]
     else:
@@ -194,10 +286,17 @@ def main() -> int:
             return 1
         name, meta = build_recipe(recipe_path, args.out_dir, args.base_url)
         index["packages"][name] = meta
+        if args.write_meta:
+            meta_out = args.out_dir / f"{name}.meta.json"
+            meta_out.write_text(
+                json.dumps({"name": name, "meta": meta}, indent=2) + "\n",
+                encoding="utf-8",
+            )
 
-    index_path = args.out_dir / "index.json"
-    index_path.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
-    print(f"[factory] Generated {index_path} ({len(index['packages'])} package(s)).")
+    if not args.write_meta:
+        index_path = args.out_dir / "index.json"
+        index_path.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+        print(f"[factory] Generated {index_path} ({len(index['packages'])} package(s)).")
     return 0
 
 

@@ -12,26 +12,87 @@ on:
 permissions:
   contents: write
 
-jobs:
-  build-and-publish:
-    runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: pkgs-v1
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+env:
+  RELEASE_TAG: pkgs-v1
 
-      - name: Install Rust musl target & packaging tools
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.list.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          pkgs=$(python3 -c 'import json, pathlib; print(json.dumps(sorted(p.parent.name for p in pathlib.Path("packages").glob("*/recipe.toml"))))')
+          echo "packages=${pkgs}" >> "$GITHUB_OUTPUT"
+          echo "Discovered packages: ${pkgs}"
+
+  build:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.discover.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust & COSMIC/Wayland build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd clang
+          sudo apt-get install -y \
+            zstd clang pkg-config just cmake \
+            libxkbcommon-dev libwayland-dev libdrm-dev libgbm-dev \
+            libinput-dev libudev-dev libseat-dev libpixman-1-dev \
+            libfontconfig-dev libfreetype-dev libssl-dev libexpat1-dev
           rustup target add x86_64-unknown-linux-musl
 
-      - name: Build .tar.zst packages and index.json
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ matrix.package }}-${{ hashFiles('packages/**/recipe.toml') }}
+          restore-keys: |
+            cargo-${{ matrix.package }}-
+            cargo-
+
+      - name: Build ${{ matrix.package }} (.tar.zst + metadata)
         run: |
           python3 scripts/build-package.py \
             --base-url "https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}" \
-            --out-dir build/packages
+            --out-dir build/packages \
+            --write-meta \
+            "${{ matrix.package }}"
+
+      - name: Upload built package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.package }}
+          path: |
+            build/packages/*.tar.zst
+            build/packages/*.meta.json
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all built packages
+        uses: actions/download-artifact@v4
+        with:
+          path: build/artifacts
+          merge-multiple: true
+
+      - name: Merge metadata into index.json
+        run: |
+          python3 scripts/build-package.py \
+            --merge-meta-dir build/artifacts \
+            --out-dir build/artifacts
+          cat build/artifacts/index.json
 
       - name: Publish packages and index.json to GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -39,9 +100,9 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: "Serenity Linux Packages (${{ env.RELEASE_TAG }})"
           body: |
-            Automated x86_64-musl static packages built by Serenity Package Factory.
+            Automated Serenity Linux packages (x86_64-musl + COSMIC Desktop + Alacritty).
             Point `/etc/spkg/repo.json` to:
-            `https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/index.json`
+            `https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/index.json`
           files: |
-            build/packages/*.tar.zst
-            build/packages/index.json
+            build/artifacts/*.tar.zst
+            build/artifacts/index.json

@@ -1,0 +1,13 @@
+[package]
+name = "cosmic-session"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC desktop session manager"
+deps = ["cosmic-comp", "cosmic-panel", "cosmic-bg", "cosmic-launcher", "cosmic-app-library"]
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-session.git"
+
+[install]
+files = { "cosmic-session" = "usr/bin/cosmic-session" }

@@ -1,0 +1,19 @@
+[package]
+name = "alacritty"
+version = "0.16.1"
+arch = "x86_64-gnu"
+description = "GPU-accelerated Rust terminal emulator"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/alacritty/alacritty.git"
+tag = "v0.16.1"
+package = "alacritty"
+
+[install]
+files = { "alacritty" = "usr/bin/alacritty" }
+
+[install.assets]
+"extra/linux/Alacritty.desktop" = "usr/share/applications/Alacritty.desktop"
+"extra/logo/alacritty-term.svg" = "usr/share/icons/hicolor/scalable/apps/Alacritty.svg"

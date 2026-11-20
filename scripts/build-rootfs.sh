@@ -21,7 +21,7 @@ for bin in "${INIT_BIN}" "${SPKG_BIN}" "${NU_BIN}" "${COREUTILS_BIN}"; do
 done
 
 rm -rf "${STAGE_DIR}"
-mkdir -p "${STAGE_DIR}"/{bin,usr/bin,usr/local/bin,sbin,etc,proc,sys,dev,tmp,run,root,var/db/spkg}
+mkdir -p "${STAGE_DIR}"/{bin,usr/bin,usr/local/bin,usr/share/applications,usr/share/icons/hicolor/scalable/apps,sbin,etc,proc,sys,dev,tmp,run,root,home/serenity,var/db/spkg}
 
 # Copy static overlay files (/etc/os-release, /etc/hosts, /etc/resolv.conf, nushell config...)
 cp -a "${ROOT_DIR}/rootfs/overlay/." "${STAGE_DIR}/"

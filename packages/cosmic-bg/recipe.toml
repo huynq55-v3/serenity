@@ -1,0 +1,13 @@
+[package]
+name = "cosmic-bg"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC wallpaper & background daemon"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-bg.git"
+
+[install]
+files = { "cosmic-bg" = "usr/bin/cosmic-bg" }

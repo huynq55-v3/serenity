@@ -1,0 +1,17 @@
+[package]
+name = "cosmic-panel"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC Top Bar & macOS-style Dock panel"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-panel.git"
+package = "cosmic-panel-bin"
+
+[install]
+files = { "cosmic-panel" = "usr/bin/cosmic-panel" }
+
+[install.assets]
+"cosmic-panel-bin/data/default_schema" = "usr/share/cosmic"

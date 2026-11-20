@@ -52,7 +52,7 @@ fn setup_filesystems() {
     mount_fs("proc", "/proc", "proc", common, None);
     mount_fs("sysfs", "/sys", "sysfs", common, None);
     mount_fs("devtmpfs", "/dev", "devtmpfs", libc::MS_NOSUID, Some("mode=0755"));
-    mount_fs("devpts", "/dev/pts", "devpts", libc::MS_NOSUID | libc::MS_NOEXEC, Some("gid=5,mode=0620"));
+    mount_fs("devpts", "/dev/pts", "devpts", libc::MS_NOSUID | libc::MS_NOEXEC, Some("gid=5,mode=0620,ptmxmode=0666"));
     mount_fs("tmpfs", "/tmp", "tmpfs", libc::MS_NOSUID | libc::MS_NODEV, Some("mode=1777"));
     mount_fs("tmpfs", "/run", "tmpfs", libc::MS_NOSUID | libc::MS_NODEV, Some("mode=0755"));
 }
@@ -220,7 +220,7 @@ fn handle_multicall_applet() -> bool {
             true
         }
         "start-desktop" => {
-            println!("[serenity] Dropping privileges to user 'serenity' (UID 1000) and launching Smithay...");
+            println!("[serenity] Dropping privileges to user 'serenity' (UID 1000)...");
             let groups: [libc::gid_t; 4] = [1000, 44, 104, 107]; // serenity, video, input, render
             unsafe {
                 if libc::setgroups(groups.len(), groups.as_ptr()) != 0 {
@@ -234,17 +234,49 @@ fn handle_multicall_applet() -> bool {
                 std::env::set_var("HOME", "/home/serenity");
                 std::env::set_var("USER", "serenity");
                 std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+                std::env::set_var("XDG_SESSION_TYPE", "wayland");
+                std::env::set_var("XDG_DATA_DIRS", "/usr/local/share:/usr/share");
+                std::env::set_var("XDG_CONFIG_DIRS", "/etc/xdg:/usr/share");
             }
             let extra_args: Vec<String> = std::env::args().skip(1).collect();
-            let mut cmd = Command::new("/usr/bin/serenity-compositor");
-            if extra_args.is_empty() {
-                // Default desktop boot flow: Smithay compositor -> standalone Login greeter
-                cmd.args(["--", "/usr/bin/serenity-login"]);
+            let err = if !extra_args.is_empty() {
+                Command::new(&extra_args[0])
+                    .args(&extra_args[1..])
+                    .current_dir("/home/serenity")
+                    .exec()
+            } else if Path::new("/usr/bin/cosmic-session").exists() {
+                println!("[serenity] Launching COSMIC Desktop (cosmic-session)...");
+                unsafe {
+                    std::env::set_var("XDG_CURRENT_DESKTOP", "COSMIC");
+                    std::env::set_var("XDG_SESSION_DESKTOP", "COSMIC");
+                }
+                if Path::new("/usr/bin/dbus-run-session").exists() {
+                    Command::new("/usr/bin/dbus-run-session")
+                        .arg("/usr/bin/cosmic-session")
+                        .current_dir("/home/serenity")
+                        .exec()
+                } else {
+                    Command::new("/usr/bin/cosmic-session")
+                        .current_dir("/home/serenity")
+                        .exec()
+                }
+            } else if Path::new("/usr/bin/cosmic-comp").exists() {
+                println!("[serenity] Launching COSMIC Compositor (cosmic-comp)...");
+                unsafe {
+                    std::env::set_var("XDG_CURRENT_DESKTOP", "COSMIC");
+                }
+                Command::new("/usr/bin/cosmic-comp")
+                    .current_dir("/home/serenity")
+                    .exec()
             } else {
-                cmd.args(&extra_args);
-            }
-            let err = cmd.current_dir("/home/serenity").exec();
-            eprintln!("[serenity] failed to exec /usr/bin/serenity-compositor: {}", err);
+                println!("[serenity] COSMIC not installed yet (run 'spkg install cosmic-desktop').");
+                println!("[serenity] Falling back to built-in Smithay compositor + Login...");
+                Command::new("/usr/bin/serenity-compositor")
+                    .args(["--", "/usr/bin/serenity-login"])
+                    .current_dir("/home/serenity")
+                    .exec()
+            };
+            eprintln!("[serenity] failed to launch desktop session: {}", err);
             std::process::exit(1);
         }
         _ => false,
@@ -262,6 +294,9 @@ fn setup_desktop_permissions() {
             libc::chown(dir as *const libc::c_char, 1000, 1000);
         }
         libc::chmod(b"/run/user/1000\0".as_ptr() as *const libc::c_char, 0o700);
+        // Allow non-root terminal emulators (Alacritty) to allocate PTYs via /dev/ptmx
+        libc::chmod(b"/dev/ptmx\0".as_ptr() as *const libc::c_char, 0o666);
+        libc::chmod(b"/dev/pts/ptmx\0".as_ptr() as *const libc::c_char, 0o666);
     }
 
     for (dir_path, gid) in [("/dev/dri", 44u32), ("/dev/input", 104u32)] {

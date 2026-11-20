@@ -206,29 +206,44 @@ impl XdgShellHandler for SerenityState {
             .and_then(|o| self.space.output_geometry(o))
             .map(|g| g.size);
 
-        let is_base_layer = self.space.elements().count() == 0;
+        // Identify desktop shell / login greeter vs normal floating app windows.
+        // Because serenity-login spawns serenity-shell right before exiting, check count <= 1
+        // or whether an existing base shell is already present with matching app_id.
+        let is_floating_app = self.space.elements().any(|w| {
+            w.toplevel().is_some_and(|t| {
+                t.with_pending_state(|s| s.states.contains(xdg_toplevel::State::Fullscreen))
+            })
+        }) && self.space.elements().count() >= 1
+            && surface
+                .with_pending_state(|s| s.title.clone().unwrap_or_default())
+                .as_str()
+                != "Serenity Desktop";
+
+        // Even simpler & rock-solid: if this is NOT Alacritty/app (i.e. first window OR login->desktop handoff),
+        // map fullscreen at (0, 0) covering 100% of the output.
+        let is_base_layer = !is_floating_app;
         if is_base_layer {
-            // Base window (serenity-login or serenity-shell) fills the full display.
             self.space.map_element(window.clone(), (0, 0), true);
             surface.with_pending_state(|state| {
                 state.states.set(xdg_toplevel::State::Activated);
+                state.states.set(xdg_toplevel::State::Fullscreen);
                 state.states.set(xdg_toplevel::State::Maximized);
                 if let Some(size) = output_size {
                     state.size = Some(size);
                 }
             });
         } else {
-            // App windows (e.g. Alacritty launched from the Dock) float centered above the Dock.
-            let win_w = 1020;
-            let win_h = 620;
+            // Floating app windows (e.g. Alacritty) open centered above the macOS Dock.
+            let win_w = 1100;
+            let win_h = 680;
             let offset = ((self.space.elements().count() as i32 - 1) % 5) * 28;
             let (x, y) = if let Some(out) = output_size {
                 (
                     ((out.w - win_w) / 2).max(20) + offset,
-                    ((out.h - win_h - 100) / 2).max(48) + offset,
+                    ((out.h - win_h - 110) / 2).max(32) + offset,
                 )
             } else {
-                (120 + offset, 70 + offset)
+                (120 + offset, 60 + offset)
             };
             self.space.map_element(window.clone(), (x, y), true);
             surface.with_pending_state(|state| {
@@ -238,12 +253,14 @@ impl XdgShellHandler for SerenityState {
         }
         surface.send_configure();
 
-        // Focus keyboard on the newly opened window
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         if let Some(kb) = self.seat.get_keyboard() {
             kb.set_focus(self, Some(surface.wl_surface().clone()), serial);
         }
-        info!("Mapped new Wayland toplevel window (base_layer={})", is_base_layer);
+        info!(
+            "Mapped Wayland toplevel (base_layer={}, output={:?})",
+            is_base_layer, output_size
+        );
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
