@@ -1,0 +1,35 @@
+[package]
+name = "openssh"
+version = "9.9.0"
+arch = "x86_64-gnu"
+description = "OpenSSH client tools (ssh, ssh-keygen, ssh-agent, ssh-add, scp, sftp) for Git over SSH & remote access"
+deps = []
+
+[source]
+type = "custom"
+script = """
+mkdir -p "${STAGE_DIR}/usr/bin"
+
+copy_with_deps() {
+    local bin="$1"
+    local dst="$2"
+    mkdir -p "$(dirname "${dst}")"
+    cp -L "${bin}" "${dst}"
+    chmod 0755 "${dst}"
+    ldd "${bin}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+        [ -f "${lib}" ] || continue
+        case "$(basename "${lib}")" in
+            ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
+        esac
+        local ldst="${STAGE_DIR}${lib}"
+        mkdir -p "$(dirname "${ldst}")"
+        [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
+    done
+}
+
+for tool in ssh ssh-keygen ssh-agent ssh-add scp sftp; do
+    if [ -x "/usr/bin/${tool}" ]; then
+        copy_with_deps "/usr/bin/${tool}" "${STAGE_DIR}/usr/bin/${tool}"
+    fi
+done
+"""
