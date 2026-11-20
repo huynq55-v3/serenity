@@ -107,9 +107,9 @@ disk-gui: desktop-release
 		done; \
 	done
 	@rm -f $(DISK_GUI)
-	@truncate -s 768M $(DISK_GUI)
+	@truncate -s 2048M $(DISK_GUI)
 	@/usr/sbin/mke2fs -q -t ext4 -d $(BUILD_DIR)/rootfs-stage -L SERENITY -F $(DISK_GUI)
-	@echo "[rootfs] Built GUI ext4 disk: $(DISK_GUI) (768M)"
+	@echo "[rootfs] Built GUI ext4 disk: $(DISK_GUI) (2048M)"
 
 initramfs: init spkg nushell coreutils
 	@chmod +x scripts/build-rootfs.sh
