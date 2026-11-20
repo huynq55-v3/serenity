@@ -48,7 +48,7 @@ jobs:
             libxkbcommon-dev libwayland-dev libdrm-dev libgbm-dev \
             libinput-dev libudev-dev libseat-dev libpixman-1-dev \
             libfontconfig-dev libfreetype-dev libssl-dev libexpat1-dev \
-            libdav1d-dev libdbus-1-dev libdisplay-info-dev libpulse-dev \
+            libdav1d-dev libdbus-1-dev libdisplay-info-dev libpulse-dev libpipewire-0.3-dev \
             libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
           rustup target add x86_64-unknown-linux-musl
 

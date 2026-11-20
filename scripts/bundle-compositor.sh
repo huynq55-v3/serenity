@@ -59,7 +59,8 @@ for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
     for pat in \
         "libEGL*.so*" "libGLESv2*.so*" "libGLdispatch*.so*" "libgbm*.so*" "libgallium*.so*" "libLLVM*.so*" \
         "libdisplay-info*.so*" "libseat*.so*" "libpixman-1*.so*" "libdav1d*.so*" \
-        "libfontconfig*.so*" "libfreetype*.so*" "libsystemd*.so*"; do
+        "libfontconfig*.so*" "libfreetype*.so*" "libsystemd*.so*" \
+        "libpipewire-0.3*.so*" "libpulse*.so*"; do
         for f in ${libdir}/${pat}; do
             [ -e "$f" ] || continue
             mkdir -p "${TARGET_ROOT}${libdir}"
