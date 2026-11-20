@@ -1,0 +1,12 @@
+[package]
+name = "serenity-shell"
+version = "0.1.0"
+edition = "2021"
+description = "Serenity Linux Desktop Shell, Login & Wi-Fi Manager (iced + Wayland)"
+
+[[bin]]
+name = "serenity-shell"
+path = "src/main.rs"
+
+[dependencies]
+iced = { version = "0.13", default-features = false, features = ["tiny-skia", "fira-sans"] }

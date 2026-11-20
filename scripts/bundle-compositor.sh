@@ -10,17 +10,22 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMP_BIN="${ROOT_DIR}/target/release/serenity-compositor"
+SHELL_BIN="${ROOT_DIR}/target/release/serenity-shell"
 TARGET_ROOT="${1:-${ROOT_DIR}/build/rootfs-stage}"
 
 if [ ! -x "${COMP_BIN}" ]; then
     echo "[bundle-compositor] ERROR: Missing ${COMP_BIN}."
-    echo "Build it first: cargo build --release -p serenity-compositor"
+    echo "Build it first: cargo build --release -p serenity-compositor -p serenity-shell"
     exit 1
 fi
 
 echo "[bundle-compositor] Installing serenity-compositor into ${TARGET_ROOT}..."
 mkdir -p "${TARGET_ROOT}/usr/bin"
 install -m 0755 "${COMP_BIN}" "${TARGET_ROOT}/usr/bin/serenity-compositor"
+if [ -x "${SHELL_BIN}" ]; then
+    echo "[bundle-compositor] Installing serenity-shell into ${TARGET_ROOT}..."
+    install -m 0755 "${SHELL_BIN}" "${TARGET_ROOT}/usr/bin/serenity-shell"
+fi
 
 copy_lib_and_deps() {
     local bin="$1"
@@ -34,6 +39,9 @@ copy_lib_and_deps() {
 
 echo "[bundle-compositor] Copying shared libraries via ldd..."
 copy_lib_and_deps "${COMP_BIN}"
+if [ -x "${SHELL_BIN}" ]; then
+    copy_lib_and_deps "${SHELL_BIN}"
+fi
 
 # Also bundle EGL/GLES2/GBM/Mesa DRI drivers dynamically loaded via dlopen()
 for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do

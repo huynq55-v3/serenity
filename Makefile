@@ -7,7 +7,7 @@ QEMU        := qemu-system-x86_64
 QEMU_MEM    ?= 512M
 QEMU_ACCEL  := $(shell test -r /dev/kvm -a -w /dev/kvm && echo "-enable-kvm -cpu host")
 
-.PHONY: help check-deps init spkg compositor nushell coreutils kernel disk initramfs packages run run-gui run-compositor run-initramfs smoke-test clean
+.PHONY: help check-deps init spkg compositor shell-ui nushell coreutils kernel disk initramfs packages run run-gui run-compositor run-desktop run-initramfs smoke-test clean
 
 help:
 	@echo "Serenity Linux Build Targets:"
@@ -15,6 +15,7 @@ help:
 	@echo "  make init           - Build Rust PID 1 (x86_64-unknown-linux-musl)"
 	@echo "  make spkg           - Build Rust Package Manager spkg (x86_64-unknown-linux-musl)"
 	@echo "  make compositor     - Build Serenity Wayland Compositor (Smithay 0.7)"
+	@echo "  make shell-ui       - Build Serenity Login & Wi-Fi GUI Shell (iced)"
 	@echo "  make nushell        - Download static musl Nushell binary"
 	@echo "  make coreutils      - Download static musl uutils/coreutils binary"
 	@echo "  make kernel         - Download & compile minimal Linux Kernel -> build/bzImage"
@@ -24,6 +25,7 @@ help:
 	@echo "  make run            - Boot Serenity in QEMU (serial console)"
 	@echo "  make run-gui        - Boot Serenity in QEMU with VirGL GPU window (GTK)"
 	@echo "  make run-compositor - Launch Smithay Wayland compositor on host desktop"
+	@echo "  make run-desktop    - Launch Smithay + Serenity Login/Wi-Fi GUI on host desktop"
 	@echo "  make run-initramfs  - Boot Serenity in QEMU from RAM-only initramfs"
 	@echo "  make smoke-test     - Automated QEMU boot + coreutils + net + poweroff test"
 	@echo "  make clean          - Remove build artifacts"
@@ -58,8 +60,14 @@ spkg:
 compositor:
 	cargo build -p serenity-compositor
 
+shell-ui:
+	cargo build -p serenity-shell
+
 run-compositor: compositor
 	cargo run -p serenity-compositor
+
+run-desktop: compositor shell-ui
+	cargo run -p serenity-compositor -- ./target/debug/serenity-shell
 
 nushell:
 	@chmod +x scripts/fetch-nushell.sh

@@ -4,6 +4,7 @@ members = [
     "crates/init",
     "crates/spkg",
     "crates/compositor",
+    "crates/shell-ui",
 ]
 
 [profile.release]
