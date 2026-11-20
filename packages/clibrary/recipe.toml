@@ -1,13 +1,20 @@
 [package]
 name = "clibrary"
-version = "1.0.1"
+version = "1.0.2"
 arch = "x86_64-gnu"
-description = "Common Linux C/C++ runtime libraries (NSS, NSPR, Cairo, Pango, ATK, X11, ALSA, CUPS, Kerberos, GLib) for Google Chrome & desktop apps"
+description = "Common Linux C/C++ runtime libraries (GTK3, NSS, NSPR, Cairo, Pango, ATK, X11, ALSA, CUPS, Kerberos, GLib) for Chrome, Antigravity & Electron apps"
 deps = []
 
 [source]
 type = "syslibs"
 patterns = [
+    # GTK 3 & Secret Service (required by Electron apps: Antigravity, VS Code, Discord)
+    "libgtk-3.so*",
+    "libgdk-3.so*",
+    "libgdk_pixbuf-2.0.so*",
+    "libepoxy.so*",
+    "libsecret-1.so*",
+    "libnotify.so*",
     # Security, TLS & DNS resolution (required by Chrome HTTPS & networking)
     "libnss3.so*",
     "libnssutil3.so*",
