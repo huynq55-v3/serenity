@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Applications
+Comment=Open COSMIC App Library
+Type=Application
+Exec=cosmic-panel-button com.system76.CosmicAppLibrary
+Terminal=false
+Categories=COSMIC;
+Icon=com.system76.CosmicAppLibrary
+NoDisplay=true
+X-CosmicApplet=true
+X-HostWaylandDisplay=true

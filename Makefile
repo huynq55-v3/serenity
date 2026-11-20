@@ -131,7 +131,10 @@ run: disk
 		-device virtio-net-pci,netdev=net0 \
 		-append "root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0 quiet loglevel=3"
 
-run-gui: disk-gui
+$(DISK_GUI):
+	@$(MAKE) disk-gui
+
+run-gui: $(DISK_GUI)
 	@test -r "$(KERNEL)" || (echo "ERROR: Kernel not found/readable at $(KERNEL)." && exit 1)
 	$(QEMU) \
 		$(QEMU_ACCEL) \

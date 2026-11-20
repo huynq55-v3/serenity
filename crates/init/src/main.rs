@@ -220,6 +220,24 @@ fn handle_multicall_applet() -> bool {
             true
         }
         "start-desktop" => {
+            // Ensure multicall symlinks for cosmic-applets exist whenever cosmic-applets is installed
+            if Path::new("/usr/bin/cosmic-applets").exists() {
+                for applet in [
+                    "cosmic-app-list",
+                    "cosmic-applet-time",
+                    "cosmic-applet-power",
+                    "cosmic-applet-network",
+                    "cosmic-applet-notifications",
+                    "cosmic-applet-minimize",
+                    "cosmic-panel-button",
+                ] {
+                    let link = format!("/usr/bin/{}", applet);
+                    if !Path::new(&link).exists() {
+                        let _ = std::os::unix::fs::symlink("cosmic-applets", &link);
+                    }
+                }
+            }
+
             // Start seatd (as root) before dropping privileges so non-root Wayland compositors
             // like cosmic-comp can securely access DRM/KMS and input devices via libseat.
             if Path::new("/usr/bin/seatd").exists() && !Path::new("/run/seatd.sock").exists() {
