@@ -86,6 +86,13 @@ trap cleanup EXIT
 
 mount "${PART}" "${MNT}"
 
+# Remove any legacy broken symlinks on the target partition (e.g. /usr/share/X11/xkb)
+# before copying real directories from STAGE_DIR so 'cp -a' does not fail with
+# "cannot overwrite non-directory ... with directory".
+if [ -L "${MNT}/usr/share/X11/xkb" ]; then
+    rm -f "${MNT}/usr/share/X11/xkb"
+fi
+
 echo "[install] Copying Serenity rootfs..."
 cp -a "${STAGE_DIR}/." "${MNT}/"
 
