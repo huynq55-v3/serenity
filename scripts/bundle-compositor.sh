@@ -168,16 +168,29 @@ for nm_ver_dir in /usr/lib/x86_64-linux-gnu/NetworkManager/*; do
     fi
 done
 
-# Bundle netplan generate/configure C helpers (Ubuntu's NetworkManager invokes
-# /usr/libexec/netplan/generate when saving Wi-Fi keyfile profiles)
+# Bundle netplan generate/configure C helpers + a tiny POSIX sh wrapper at /usr/sbin/netplan
+# and /usr/bin/netplan (Ubuntu 24.04's NetworkManager 1.46 invokes `netplan generate` via PATH,
+# whereas Ubuntu 26.04 invokes /usr/libexec/netplan/configure directly).
 if [ -d /usr/libexec/netplan ]; then
-    mkdir -p "${TARGET_ROOT}/usr/libexec/netplan"
+    mkdir -p "${TARGET_ROOT}/usr/libexec/netplan" "${TARGET_ROOT}/usr/sbin" "${TARGET_ROOT}/usr/bin"
     for np_bin in /usr/libexec/netplan/generate /usr/libexec/netplan/configure; do
         if [ -x "${np_bin}" ]; then
             install -m 0755 "${np_bin}" "${TARGET_ROOT}${np_bin}"
             copy_lib_and_deps "${np_bin}"
         fi
     done
+    if [ -x "${TARGET_ROOT}/usr/libexec/netplan/generate" ]; then
+        cat > "${TARGET_ROOT}/usr/sbin/netplan" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = "generate" ]; then
+    shift
+    exec /usr/libexec/netplan/generate "$@"
+fi
+exit 0
+EOF
+        chmod 0755 "${TARGET_ROOT}/usr/sbin/netplan"
+        ln -sf /usr/sbin/netplan "${TARGET_ROOT}/usr/bin/netplan"
+    fi
 fi
 
 # Bundle OpenSSL provider modules (legacy.so) for WPA/EAP crypto in wpa_supplicant

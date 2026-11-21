@@ -2,7 +2,7 @@
 name = "serenity-base"
 # Bump to rebuild in CI (e.g. after changing crates/compositor, crates/shell-ui,
 # crates/sysd or scripts/bundle-compositor.sh, or to pick up Ubuntu security updates).
-version = "0.1.1"
+version = "0.1.2"
 arch = "x86_64-gnu"
 description = "Serenity GNU runtime layer: glibc + ld-linux, Mesa (EGL/GBM/DRI/Vulkan), Wayland/xkb, PipeWire/Pulse libs, dbus, seatd, NetworkManager + wpa_supplicant, dash/bash, zoneinfo, serenity-compositor/login/shell/sysd"
 deps = []
