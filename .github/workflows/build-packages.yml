@@ -26,7 +26,7 @@ env:
 
 jobs:
   discover:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       packages: ${{ steps.list.outputs.packages }}
       has_packages: ${{ steps.list.outputs.has_packages }}
@@ -81,7 +81,7 @@ jobs:
   build:
     needs: discover
     if: needs.discover.outputs.has_packages == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -154,6 +154,25 @@ jobs:
                 sudo apt-get install -y --no-install-recommends \
                   zstd binutils curl grep sed gawk findutils tar xz-utils gzip procps file \
                   diffutils util-linux libc-bin
+              elif [ "${{ matrix.package }}" = "serenity-base" ]; then
+                # Everything scripts/bundle-compositor.sh copies into the rootfs comes from
+                # THIS pinned runner image, so glibc/Mesa/NM match every other package.
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends \
+                  zstd clang lld pkg-config cmake \
+                  libxkbcommon-dev libwayland-dev libdrm-dev libgbm-dev libinput-dev libudev-dev \
+                  libseat-dev libpixman-1-dev libfontconfig-dev libfreetype-dev libssl-dev \
+                  libdbus-1-dev libdisplay-info-dev libegl-dev libgles-dev libvulkan-dev \
+                  libegl1 libgles2 libegl-mesa0 libgbm1 libgl1-mesa-dri mesa-vulkan-drivers libvulkan1 \
+                  libwayland-client0 libwayland-server0 libwayland-egl1 libwayland-cursor0 \
+                  libxkbcommon0 libdisplay-info1 libseat1 libpixman-1-0 libdav1d7 \
+                  libfontconfig1 libfreetype6 libsystemd0 libpipewire-0.3-0t64 libpulse0 \
+                  dbus-daemon dbus-bin seatd network-manager wpasupplicant netplan.io \
+                  dash bash tzdata
+                rustup target add x86_64-unknown-linux-musl
+              elif [ "${{ matrix.package }}" = "pop-launcher" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends zstd git pkg-config libxkbcommon-dev libegl-dev libssl-dev
               elif [ "${{ matrix.package }}" = "linux" ]; then
                 # Full distro-config kernel build needs ~15 GB: drop preinstalled SDKs first.
                 sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
@@ -216,7 +235,7 @@ jobs:
   publish:
     needs: [discover, build]
     if: always() && needs.discover.outputs.has_packages == 'true' && (needs.build.result == 'success' || needs.build.result == 'failure')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
