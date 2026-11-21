@@ -728,7 +728,23 @@ fn main() {
     setup_environment();
 
     let _ = fs::create_dir_all("/root");
-    let kmods_loaded = kmod::load_kernel_modules();
+    // Drivers: kmod coldplug (modalias -> modules.alias) + uevent hotplug when the
+    // `linux` + `kmod` packages are installed; otherwise legacy modules.load list.
+    let uevent_sock = kmod::open_uevent_socket();
+    let use_modprobe = kmod::modprobe_available();
+    let kmods_loaded = if use_modprobe {
+        kmod::set_kernel_modprobe_helper();
+        kmod::coldplug()
+    } else {
+        kmod::load_kernel_modules()
+    };
+    if use_modprobe {
+        if let Some(sock) = uevent_sock {
+            kmod::spawn_hotplug_thread(sock);
+        }
+        // GPU drivers probe asynchronously (firmware load); give them time before seat setup.
+        kmod::wait_for_gpu(3000);
+    }
     if kmods_loaded > 0 {
         // Brief settle time for Wi-Fi / DRM device nodes after module load.
         thread::sleep(Duration::from_millis(400));

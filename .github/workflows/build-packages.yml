@@ -154,6 +154,20 @@ jobs:
                 sudo apt-get install -y --no-install-recommends \
                   zstd binutils curl grep sed gawk findutils tar xz-utils gzip procps file \
                   diffutils util-linux libc-bin
+              elif [ "${{ matrix.package }}" = "linux" ]; then
+                # Full distro-config kernel build needs ~15 GB: drop preinstalled SDKs first.
+                sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+                df -h /
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends \
+                  zstd build-essential bc bison flex libelf-dev libssl-dev \
+                  cpio rsync kmod xz-utils python3 curl dpkg-dev
+              elif [ "${{ matrix.package }}" = "kmod" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends zstd kmod
+              elif [ "${{ matrix.package }}" = "linux-firmware" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends zstd git make rdfind parallel python3
               else
                 command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
               fi

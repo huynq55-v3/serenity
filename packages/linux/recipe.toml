@@ -1,0 +1,94 @@
+[package]
+name = "linux"
+# Upstream kernel.org longterm version. Bump this to rebuild the kernel in CI.
+version = "6.18.32"
+arch = "x86_64"
+description = "Serenity Linux kernel: full distro driver set as zstd modules (+ modules.alias for kmod coldplug/hotplug), boots without initrd"
+deps = ["kmod"]
+
+[source]
+type = "custom"
+script = """
+KVER="${PKG_VERSION}"
+MAJOR="${KVER%%.*}"
+BASE="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x"
+cd "${WORK_DIR}"
+
+echo "  -> Downloading linux-${KVER}.tar.xz + sha256sums.asc"
+curl -fsSL "${BASE}/linux-${KVER}.tar.xz" -o "linux-${KVER}.tar.xz"
+curl -fsSL "${BASE}/sha256sums.asc" -o sha256sums.asc
+EXPECTED="$(awk -v f="linux-${KVER}.tar.xz" '$2 == f { print $1 }' sha256sums.asc)"
+if [ -z "${EXPECTED}" ]; then
+    echo "ERROR: linux-${KVER}.tar.xz not listed in sha256sums.asc" >&2
+    exit 1
+fi
+echo "${EXPECTED}  linux-${KVER}.tar.xz" | sha256sum -c -
+tar -xf "linux-${KVER}.tar.xz"
+SRC="${WORK_DIR}/linux-${KVER}"
+
+# Base config = Ubuntu's generic kernel config (every driver as =m).
+# Prefer the HWE kernel (newest) so new hardware options are already present.
+BASE_CFG="${WORK_DIR}/base.config"
+if [ -n "${KERNEL_BASE_CONFIG:-}" ] && [ -f "${KERNEL_BASE_CONFIG}" ]; then
+    cp "${KERNEL_BASE_CONFIG}" "${BASE_CFG}"
+else
+    IMG=""
+    for meta in linux-image-generic-hwe-24.04 linux-image-generic; do
+        IMG="$(apt-cache depends "${meta}" 2>/dev/null | awk '/Depends: linux-image-[0-9]/ { print $2; exit }')"
+        [ -n "${IMG}" ] && break
+    done
+    if [ -z "${IMG}" ]; then
+        echo "ERROR: cannot resolve an Ubuntu generic kernel package for the base config" >&2
+        exit 1
+    fi
+    UVER="${IMG#linux-image-}"
+    echo "  -> Using Ubuntu ${UVER} config as base"
+    mkdir -p "${WORK_DIR}/ubuntu-cfg"
+    (
+        cd "${WORK_DIR}/ubuntu-cfg"
+        for pkg in "linux-modules-${UVER}" "linux-image-unsigned-${UVER}" "${IMG}"; do
+            apt-get download "${pkg}" >/dev/null 2>&1 || continue
+            for deb in ./*.deb; do
+                dpkg-deb --fsys-tarfile "${deb}" | tar -x --wildcards './boot/config-*' 2>/dev/null || true
+                rm -f "${deb}"
+            done
+            [ -n "$(ls boot/config-* 2>/dev/null)" ] && break
+        done
+    )
+    CFG_FILE="$(ls "${WORK_DIR}"/ubuntu-cfg/boot/config-* 2>/dev/null | head -n 1)"
+    if [ -z "${CFG_FILE}" ]; then
+        echo "ERROR: /boot/config-${UVER} not found in Ubuntu kernel packages" >&2
+        exit 1
+    fi
+    cp "${CFG_FILE}" "${BASE_CFG}"
+fi
+
+cd "${SRC}"
+cp "${BASE_CFG}" .config
+./scripts/kconfig/merge_config.sh -m .config "${REPO_DIR}/kernel/config/serenity_hw.fragment"
+make ARCH=x86_64 olddefconfig
+
+# Fail early if a dependency demoted a boot-critical driver from =y to =m.
+missing=""
+for opt in EXT4_FS BLK_DEV_NVME VMD SATA_AHCI USB_XHCI_PCI USB_STORAGE USB_HID VIRTIO_BLK DEVTMPFS DEVTMPFS_MOUNT FW_LOADER_COMPRESS_ZSTD MODULE_COMPRESS_ZSTD WIRELESS DRM; do
+    grep -q "^CONFIG_${opt}=y" .config || missing="${missing} ${opt}"
+done
+if [ -n "${missing}" ]; then
+    echo "ERROR: boot-critical options not built-in:${missing}" >&2
+    exit 1
+fi
+
+echo "  -> Building with $(nproc) jobs (bzImage + modules)..."
+make ARCH=x86_64 -j"$(nproc)" bzImage modules
+KREL="$(make -s kernelrelease)"
+
+make ARCH=x86_64 INSTALL_MOD_PATH="${STAGE_DIR}" INSTALL_MOD_STRIP=1 DEPMOD=/sbin/depmod modules_install
+rm -f "${STAGE_DIR}/lib/modules/${KREL}/build" "${STAGE_DIR}/lib/modules/${KREL}/source"
+test -s "${STAGE_DIR}/lib/modules/${KREL}/modules.alias"
+
+install -D -m 0644 arch/x86/boot/bzImage "${STAGE_DIR}/boot/vmlinuz-${KREL}"
+install -m 0644 System.map "${STAGE_DIR}/boot/System.map-${KREL}"
+install -m 0644 .config "${STAGE_DIR}/boot/config-${KREL}"
+ln -sf "vmlinuz-${KREL}" "${STAGE_DIR}/boot/vmlinuz-serenity"
+echo "  -> Kernel ${KREL}: $(du -sh "${STAGE_DIR}/lib/modules/${KREL}" | cut -f1) of modules"
+"""

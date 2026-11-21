@@ -243,6 +243,7 @@ def stage_custom(recipe: dict, stage_dir: Path, work_dir: Path) -> None:
     env["STAGE_DIR"] = str(stage_dir)
     env["WORK_DIR"] = str(work_dir)
     env["PKG_VERSION"] = str(recipe["package"]["version"])
+    env["REPO_DIR"] = str(ROOT_DIR)
     subprocess.run(["bash", "-euo", "pipefail", "-c", script], env=env, check=True)
     install_assets_and_inline(recipe, None, stage_dir)
 

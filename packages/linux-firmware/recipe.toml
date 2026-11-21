@@ -1,0 +1,31 @@
+[package]
+name = "linux-firmware"
+# Upstream tag (YYYYMMDD) from git.kernel.org linux-firmware. Bump to refresh firmware.
+# "latest" also works (newest tag at build time) but CI will not notice new tags by itself.
+version = "20260810"
+arch = "any"
+description = "Complete linux-firmware tree (zstd-compressed, deduplicated) for Wi-Fi, GPU, Bluetooth, audio and NIC drivers"
+deps = []
+
+[source]
+type = "custom"
+script = """
+REPO="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git"
+cd "${WORK_DIR}"
+TAG="${PKG_VERSION}"
+if [ "${TAG}" = "latest" ]; then
+    TAG="$(git ls-remote --tags --refs "${REPO}" | awk -F/ '{print $NF}' | grep -E '^[0-9]{8}$' | sort | tail -n 1)"
+fi
+echo "  -> linux-firmware tag ${TAG}"
+git clone --depth 1 --branch "${TAG}" "${REPO}" linux-firmware
+cd linux-firmware
+
+# install-zst = every file listed in WHENCE, zstd-compressed; dedup turns duplicates into symlinks.
+make DESTDIR="${STAGE_DIR}" FIRMWAREDIR=/lib/firmware install-zst
+if command -v rdfind >/dev/null 2>&1; then
+    make DESTDIR="${STAGE_DIR}" FIRMWAREDIR=/lib/firmware dedup || true
+fi
+cp WHENCE "${STAGE_DIR}/lib/firmware/WHENCE"
+echo "${TAG}" > "${STAGE_DIR}/lib/firmware/.serenity-firmware-tag"
+echo "  -> Firmware: $(du -sh "${STAGE_DIR}/lib/firmware" | cut -f1)"
+"""
