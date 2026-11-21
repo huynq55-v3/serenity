@@ -1,6 +1,6 @@
 [package]
 name = "clibrary"
-version = "1.0.4"
+version = "1.0.5"
 arch = "x86_64-gnu"
 description = "Common Linux C/C++ runtime libraries (GTK3 + GSettings + Glycin/gdk-pixbuf + MIME, NSS, NSPR, Cairo, Pango, ATK, X11, ALSA, CUPS, Kerberos, GLib) for Chrome, Antigravity & Electron apps"
 deps = []

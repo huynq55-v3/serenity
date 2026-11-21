@@ -137,7 +137,7 @@ def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
     """Collect common C/C++ shared libraries + transitive ldd deps into a portable spkg archive."""
     src = recipe["source"]
     patterns = src.get("patterns", [])
-    search_dirs = [Path("/usr/lib/x86_64-linux-gnu"), Path("/lib/x86_64-linux-gnu")]
+    search_dirs = [Path("/usr/lib/x86_64-linux-gnu")]
     seen: set[Path] = set()
 
     # Never package core glibc / dynamic loader into app or syslibs packages:
@@ -168,15 +168,25 @@ def stage_syslibs(recipe: dict, stage_dir: Path, _work_dir: Path) -> None:
                     if dep.exists():
                         copy_one(dep)
 
+    def canonical_lib_path(p: Path) -> Path:
+        # On usr-merged Ubuntu 24.04, ldd reports /lib/x86_64-linux-gnu/foo.so.0 while
+        # p.resolve() returns /usr/lib/x86_64-linux-gnu/foo.so.0.x.y. Normalize both to
+        # /usr/lib/x86_64-linux-gnu/... so SONAME symlinks and real files stay together!
+        s = str(p)
+        if s.startswith("/lib/x86_64-linux-gnu/"):
+            return Path("/usr" + s)
+        return p
+
     def copy_one(p: Path) -> None:
         if not p.exists() and not p.is_symlink():
             return
         if p.name.startswith(skip_prefixes):
             return
-        if p in seen:
+        canon = canonical_lib_path(p)
+        if canon in seen:
             return
-        seen.add(p)
-        dst = stage_dir / str(p).lstrip("/")
+        seen.add(canon)
+        dst = stage_dir / str(canon).lstrip("/")
         dst.parent.mkdir(parents=True, exist_ok=True)
         if p.is_symlink():
             target = os.readlink(p)
