@@ -1,6 +1,6 @@
 [package]
 name = "rust"
-version = "1.87.0-r4"
+version = "1.100.0-r1"
 arch = "x86_64-gnu"
 description = "Rust compiler (rustc) + Cargo (x86_64 GNU + musl) with self-contained clang/lld/llvm-ar & musl headers"
 deps = ["clibrary"]
