@@ -103,6 +103,36 @@ write_dns_files_live() {
     rm -rf "${tmp_dir}"
 }
 
+fix_glibc_linker_scripts() {
+    local libdir="/usr/lib/x86_64-linux-gnu"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    if [ -f "${libdir}/libc.so" ] && grep -q '/lib/x86_64-linux-gnu/' "${libdir}/libc.so"; then
+        echo "[self-build] Fixing glibc linker script paths in ${libdir}/libc.so..."
+        sed 's|/lib/x86_64-linux-gnu/|/usr/lib/x86_64-linux-gnu/|g' "${libdir}/libc.so" > "${tmp_dir}/libc.so"
+        atomic_install 0644 "${tmp_dir}/libc.so" "${libdir}/libc.so"
+    fi
+
+    if [ -f "${libdir}/libm.so" ]; then
+        if [ ! -e "${libdir}/libmvec.so.1" ] && grep -q 'libmvec\.so\.1' "${libdir}/libm.so"; then
+            echo "[self-build] Fixing glibc linker script in ${libdir}/libm.so (dropping missing libmvec.so.1)..."
+            cat > "${tmp_dir}/libm.so" <<'EOF'
+/* GNU ld script */
+OUTPUT_FORMAT(elf64-x86-64)
+GROUP ( /usr/lib/x86_64-linux-gnu/libm.so.6 )
+EOF
+            atomic_install 0644 "${tmp_dir}/libm.so" "${libdir}/libm.so"
+        elif grep -q '/lib/x86_64-linux-gnu/' "${libdir}/libm.so"; then
+            echo "[self-build] Fixing glibc linker script paths in ${libdir}/libm.so..."
+            sed 's|/lib/x86_64-linux-gnu/|/usr/lib/x86_64-linux-gnu/|g' "${libdir}/libm.so" > "${tmp_dir}/libm.so"
+            atomic_install 0644 "${tmp_dir}/libm.so" "${libdir}/libm.so"
+        fi
+    fi
+
+    rm -rf "${tmp_dir}"
+}
+
 check_host_tools() {
     local missing=()
     for cmd in cargo rustc curl tar xz gzip install cp ln mv awk sed grep find mktemp; do
@@ -128,6 +158,10 @@ ensure_musl_toolchain() {
                 as_root /usr/bin/spkg install rust || true
             fi
         fi
+    fi
+
+    if [ "${NO_INSTALL}" -eq 0 ]; then
+        fix_glibc_linker_scripts
     fi
 
     if [ ! -d "/usr/lib/rustlib/${MUSL_TARGET}/lib" ]; then
@@ -369,6 +403,8 @@ install_remote_packages() {
         atomic_install 0644 "${mod_tmp}" /etc/serenity/modules.load
         rm -f "${mod_tmp}"
     fi
+
+    fix_glibc_linker_scripts
 }
 
 main() {

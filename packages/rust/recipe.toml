@@ -1,6 +1,6 @@
 [package]
 name = "rust"
-version = "1.87.0-r3"
+version = "1.87.0-r4"
 arch = "x86_64-gnu"
 description = "Rust compiler (rustc) + Cargo (x86_64 GNU + musl) with self-contained clang/lld/llvm-ar & musl headers"
 deps = ["clibrary"]
@@ -95,6 +95,14 @@ for f in crt1.o Scrt1.o crti.o crtn.o libc.so libc_nonshared.a libm.so libmvec.s
         cp -a "/usr/lib/x86_64-linux-gnu/${f}" "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/"
     fi
 done
+if [ -e /usr/lib/x86_64-linux-gnu/libmvec.so.1 ]; then
+    cp -L /usr/lib/x86_64-linux-gnu/libmvec.so.1 "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/"
+fi
+for ld_script in libc.so libm.so; do
+    if [ -f "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/${ld_script}" ]; then
+        sed -i 's|/lib/x86_64-linux-gnu/|/usr/lib/x86_64-linux-gnu/|g' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/${ld_script}"
+    fi
+done
 
 # Copy GCC CRT objects & libgcc static/shared archives (clang uses them automatically to link)
 GCC_DIR="$(dirname "$(gcc -print-libgcc-file-name)")"
@@ -114,6 +122,9 @@ test -d "${STAGE_DIR}/usr/lib/rustlib/x86_64-unknown-linux-musl/lib"
 test -x "${STAGE_DIR}/usr/bin/llvm-ar"
 test -f "${STAGE_DIR}/usr/include/x86_64-linux-musl/sys/auxv.h"
 test -f "${STAGE_DIR}${CLANG_RES}/include/stddef.h"
+! grep -q '/lib/x86_64-linux-gnu/' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libc.so"
+! grep -q '/lib/x86_64-linux-gnu/' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libm.so"
+test -f "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libmvec.so.1"
 """
 
 [install.scripts]
