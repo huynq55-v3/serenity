@@ -564,6 +564,13 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
     white-space: pre-wrap;
   }
   .action-bar { display: flex; gap: 5px; flex-wrap: wrap; }
+  @keyframes critFlash {
+    0%, 100% { box-shadow: inset 0 0 0 0 rgba(239, 68, 68, 0); }
+    25%, 75% { box-shadow: inset 0 0 0 4px rgba(239, 68, 68, 0.9), inset 0 0 48px rgba(239, 68, 68, 0.35); }
+  }
+  body.alert-flash {
+    animation: critFlash 0.9s ease-in-out 2;
+  }
 </style>
 </head>
 <body>
@@ -582,6 +589,8 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       <span id="sse-text">LIVE SSE STREAM</span>
     </div>
     <button id="btn-autodefend" class="btn-ok" onclick="toggleAutoDefend()">Auto-Defend: ON</button>
+    <button id="btn-siren" class="btn-ok" onclick="toggleSirenAndNoti()">🔔 Siren &amp; Noti: ON</button>
+    <button class="btn-info" onclick="testSirenAndNoti()">🔊 Test Alarm</button>
     <button class="btn-warn" onclick="simulateDrill()">Simulate Attack Drill</button>
     <button onclick="clearAlerts()">Clear Alerts</button>
   </div>
@@ -720,6 +729,117 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 
 <script>
 let currentState = null;
+let alarmEnabled = true;
+let audioCtx = null;
+let lastMaxAlertId = null;
+
+function ensureAudioAndNotiPermission() {
+  if (!audioCtx && (window.AudioContext || window.webkitAudioContext)) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+
+document.addEventListener('click', () => ensureAudioAndNotiPermission(), { once: true });
+
+function playSiren(severity) {
+  if (!alarmEnabled) return;
+  try {
+    ensureAudioAndNotiPermission();
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    if (severity === 'CRITICAL') {
+      // 6 alternating dual-tone klaxon sweeps (960Hz <-> 1440Hz)
+      for (let i = 0; i < 6; i++) {
+        const start = now + i * 0.28;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(i % 2 === 0 ? 960 : 1440, start);
+        osc.frequency.linearRampToValueAtTime(i % 2 === 0 ? 1440 : 960, start + 0.26);
+        gain.gain.setValueAtTime(0.001, start);
+        gain.gain.exponentialRampToValueAtTime(0.28, start + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.27);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(start);
+        osc.stop(start + 0.28);
+      }
+    } else {
+      // 3 sharp double-beeps for HIGH severity
+      for (let i = 0; i < 3; i++) {
+        const start = now + i * 0.22;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(780, start);
+        gain.gain.setValueAtTime(0.001, start);
+        gain.gain.exponentialRampToValueAtTime(0.22, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.16);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(start);
+        osc.stop(start + 0.17);
+      }
+    }
+  } catch (_) {}
+}
+
+function fireBrowserNotification(alertObj) {
+  document.body.classList.remove('alert-flash');
+  void document.body.offsetWidth;
+  document.body.classList.add('alert-flash');
+  setTimeout(() => document.body.classList.remove('alert-flash'), 2500);
+
+  if (!alarmEnabled || !('Notification' in window)) return;
+  if (Notification.permission === 'granted') {
+    try {
+      new Notification(`🚨 SERENITY GUARD [${alertObj.severity}]`, {
+        body: `${alertObj.rule_id}: ${alertObj.summary}`,
+        tag: 'serenity-guard-' + alertObj.id,
+        requireInteraction: alertObj.severity === 'CRITICAL'
+      });
+    } catch (_) {}
+  }
+}
+
+function toggleSirenAndNoti() {
+  alarmEnabled = !alarmEnabled;
+  if (alarmEnabled) ensureAudioAndNotiPermission();
+  const btn = document.getElementById('btn-siren');
+  btn.textContent = alarmEnabled ? '🔔 Siren & Noti: ON' : '🔕 Siren & Noti: OFF';
+  btn.className = alarmEnabled ? 'btn-ok' : 'btn-warn';
+  showToast('Audio Siren & Chrome Notifications ' + (alarmEnabled ? 'ENABLED' : 'MUTED'), !alarmEnabled);
+}
+
+function testSirenAndNoti() {
+  alarmEnabled = true;
+  const btn = document.getElementById('btn-siren');
+  btn.textContent = '🔔 Siren & Noti: ON';
+  btn.className = 'btn-ok';
+  ensureAudioAndNotiPermission();
+  playSiren('CRITICAL');
+  const sendTestNoti = () => {
+    fireBrowserNotification({
+      id: 'test-' + Date.now(),
+      severity: 'CRITICAL',
+      rule_id: 'TEST_ALARM',
+      summary: 'Serenity Guard siren & Chrome notification alarm active!'
+    });
+  };
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().then(sendTestNoti).catch(() => {});
+  } else {
+    sendTestNoti();
+  }
+  showToast('Testing SOC Siren & Chrome Desktop Notification...', false);
+}
 
 function showToast(msg, isErr) {
   const t = document.getElementById('toast');
@@ -798,6 +918,7 @@ function rebaselineFim() {
   apiAction({ action: 'rebaseline_fim' });
 }
 function simulateDrill() {
+  ensureAudioAndNotiPermission();
   apiAction({ action: 'simulate_alert' });
 }
 
@@ -838,6 +959,19 @@ function renderSnapshot(st) {
 
   // KPI: Alerts
   const alerts = st.alerts || [];
+  const maxId = alerts.reduce((m, a) => Math.max(m, Number(a.id) || 0), 0);
+  if (lastMaxAlertId === null) {
+    lastMaxAlertId = maxId;
+  } else if (maxId > lastMaxAlertId) {
+    const newAlerts = alerts.filter(a => (Number(a.id) || 0) > lastMaxAlertId);
+    lastMaxAlertId = maxId;
+    const urgent = newAlerts.filter(a => a.severity === 'CRITICAL' || a.severity === 'HIGH');
+    if (urgent.length > 0) {
+      const hasCrit = urgent.some(a => a.severity === 'CRITICAL');
+      playSiren(hasCrit ? 'CRITICAL' : 'HIGH');
+      fireBrowserNotification(urgent[0]);
+    }
+  }
   const critCount = alerts.filter(a => a.severity === 'CRITICAL').length;
   const highCount = alerts.filter(a => a.severity === 'HIGH').length;
   const defCount = alerts.filter(a => a.severity === 'DEFENSE').length;

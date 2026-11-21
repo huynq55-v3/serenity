@@ -446,6 +446,59 @@ fn run_daemon() -> Result<(), String> {
     dashboard::spawn_http_server(shared.clone())?;
     shared.broadcast_snapshot();
 
+    if let Some(sock) = proc_sock {
+        let proc_shared = shared.clone();
+        thread::spawn(move || loop {
+            let now = epoch_now();
+            let events = sock.recv_batch(now);
+            if events.is_empty() {
+                continue;
+            }
+            let mut auto_actions: Vec<i32> = Vec::new();
+            {
+                let mut st = proc_shared.state.lock().unwrap();
+                for (rec, maybe_alert) in events {
+                    if rec.kind == "EXEC" {
+                        st.push_proc_event(rec);
+                    }
+                    if let Some(a) = maybe_alert {
+                        st.push_alert(
+                            now,
+                            a.severity,
+                            a.rule_id,
+                            a.summary,
+                            Some(a.pid),
+                            a.exe,
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                        );
+                        if st.auto_defend && a.recommend_freeze {
+                            auto_actions.push(a.pid);
+                        }
+                    }
+                }
+            }
+            for bad_pid in auto_actions {
+                if let Ok(msg) = actions::freeze_process(bad_pid) {
+                    let mut st = proc_shared.state.lock().unwrap();
+                    st.push_alert(
+                        now,
+                        "DEFENSE",
+                        "AUTO_DEFEND_FREEZE",
+                        format!("Auto-Defend: {}", msg),
+                        Some(bad_pid),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    );
+                }
+            }
+            proc_shared.broadcast_snapshot();
+        });
+    }
+
     println!(
         "[serenity-guard] Daemon started (PID {}). SOC Dashboard: http://{}",
         my_pid,
@@ -462,57 +515,7 @@ fn run_daemon() -> Result<(), String> {
         let now = epoch_now();
         let mut changed = false;
 
-        // 1. Poll real-time NETLINK_CONNECTOR PROC_EVENTS every 250ms
-        if let Some(ref sock) = proc_sock {
-            let events = sock.poll_events(now);
-            if !events.is_empty() {
-                let mut auto_actions: Vec<i32> = Vec::new();
-                {
-                    let mut st = shared.state.lock().unwrap();
-                    for (rec, maybe_alert) in events {
-                        if rec.kind == "EXEC" {
-                            st.push_proc_event(rec.clone());
-                            changed = true;
-                        }
-                        if let Some(a) = maybe_alert {
-                            st.push_alert(
-                                now,
-                                a.severity,
-                                a.rule_id,
-                                a.summary,
-                                Some(a.pid),
-                                a.exe,
-                                String::new(),
-                                String::new(),
-                                String::new(),
-                            );
-                            if st.auto_defend && a.recommend_freeze {
-                                auto_actions.push(a.pid);
-                            }
-                            changed = true;
-                        }
-                    }
-                }
-                for bad_pid in auto_actions {
-                    if let Ok(msg) = actions::freeze_process(bad_pid) {
-                        let mut st = shared.state.lock().unwrap();
-                        st.push_alert(
-                            now,
-                            "DEFENSE",
-                            "AUTO_DEFEND_FREEZE",
-                            format!("Auto-Defend: {}", msg),
-                            Some(bad_pid),
-                            String::new(),
-                            String::new(),
-                            String::new(),
-                            String::new(),
-                        );
-                    }
-                }
-            }
-        }
-
-        // 2. Scan active sockets & FIM every 1.5s (6 ticks * 250ms)
+        // Scan active sockets & FIM every 1.5s (6 ticks * 250ms)
         if tick % 6 == 0 {
             let do_rebaseline = {
                 let mut st = shared.state.lock().unwrap();

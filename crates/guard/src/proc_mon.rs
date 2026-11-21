@@ -279,7 +279,7 @@ impl ProcConnectorSocket {
         let fd = unsafe {
             libc::socket(
                 libc::AF_NETLINK,
-                libc::SOCK_DGRAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+                libc::SOCK_DGRAM | libc::SOCK_CLOEXEC,
                 NETLINK_CONNECTOR,
             )
         };
@@ -353,6 +353,43 @@ impl ProcConnectorSocket {
         Some(Self { fd })
     }
 
+    pub fn recv_batch(&self, now_epoch: u64) -> Vec<(ProcEventRecord, Option<ProcSecurityAlert>)> {
+        let mut out = Vec::new();
+        let mut buf = [0u8; 8192];
+
+        // Block waiting for the next kernel event so we inspect /proc/<pid> immediately
+        let n = unsafe {
+            libc::recv(
+                self.fd,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+                0,
+            )
+        };
+        if n <= 0 {
+            return out;
+        }
+        Self::parse_packet(&buf, n as usize, now_epoch, &mut out);
+
+        // Drain any remaining queued netlink packets without blocking
+        loop {
+            let n = unsafe {
+                libc::recv(
+                    self.fd,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                    libc::MSG_DONTWAIT,
+                )
+            };
+            if n <= 0 {
+                break;
+            }
+            Self::parse_packet(&buf, n as usize, now_epoch, &mut out);
+        }
+
+        out
+    }
+
     pub fn poll_events(&self, now_epoch: u64) -> Vec<(ProcEventRecord, Option<ProcSecurityAlert>)> {
         let mut out = Vec::new();
         let mut buf = [0u8; 8192];
@@ -369,118 +406,124 @@ impl ProcConnectorSocket {
             if n <= 0 {
                 break;
             }
-            let n = n as usize;
-            let min_hdr = std::mem::size_of::<NlMsgHdr>()
-                + std::mem::size_of::<CnMsgHeader>()
-                + std::mem::size_of::<ProcEventHeader>();
-            if n < min_hdr {
-                continue;
-            }
-
-            let cn_offset = std::mem::size_of::<NlMsgHdr>();
-            let cn: CnMsgHeader = unsafe {
-                std::ptr::read_unaligned(buf[cn_offset..].as_ptr() as *const CnMsgHeader)
-            };
-            if cn.id.idx != CN_IDX_PROC || cn.id.val != CN_VAL_PROC {
-                continue;
-            }
-
-            let ev_offset = cn_offset + std::mem::size_of::<CnMsgHeader>();
-            let ev: ProcEventHeader = unsafe {
-                std::ptr::read_unaligned(buf[ev_offset..].as_ptr() as *const ProcEventHeader)
-            };
-            let data_offset = ev_offset + std::mem::size_of::<ProcEventHeader>();
-
-            match ev.what {
-                PROC_EVENT_EXEC => {
-                    if data_offset + 8 > n {
-                        continue;
-                    }
-                    let pid = i32::from_ne_bytes([
-                        buf[data_offset],
-                        buf[data_offset + 1],
-                        buf[data_offset + 2],
-                        buf[data_offset + 3],
-                    ]);
-                    let (ppid, uid, euid, comm, exe, cmdline) = read_proc_meta(pid);
-                    if comm.is_empty() && exe.is_empty() {
-                        continue;
-                    }
-                    let (_, _, _, parent_comm, parent_exe, _) = if ppid > 0 {
-                        read_proc_meta(ppid)
-                    } else {
-                        (0, 0, 0, String::new(), String::new(), String::new())
-                    };
-                    let rec = ProcEventRecord {
-                        kind: "EXEC".to_string(),
-                        pid,
-                        ppid,
-                        uid,
-                        euid,
-                        comm,
-                        exe,
-                        cmdline,
-                        parent_comm,
-                        parent_exe,
-                        timestamp_epoch: now_epoch,
-                    };
-                    let alert = evaluate_exec_event(&rec);
-                    out.push((rec, alert));
-                }
-                PROC_EVENT_UID => {
-                    if data_offset + 16 > n {
-                        continue;
-                    }
-                    let pid = i32::from_ne_bytes([
-                        buf[data_offset],
-                        buf[data_offset + 1],
-                        buf[data_offset + 2],
-                        buf[data_offset + 3],
-                    ]);
-                    let ruid = u32::from_ne_bytes([
-                        buf[data_offset + 8],
-                        buf[data_offset + 9],
-                        buf[data_offset + 10],
-                        buf[data_offset + 11],
-                    ]);
-                    let euid = u32::from_ne_bytes([
-                        buf[data_offset + 12],
-                        buf[data_offset + 13],
-                        buf[data_offset + 14],
-                        buf[data_offset + 15],
-                    ]);
-                    let (ppid, cur_ruid, cur_euid, comm, exe, cmdline) = read_proc_meta(pid);
-                    let (_, _, _, parent_comm, parent_exe, _) = if ppid > 0 {
-                        read_proc_meta(ppid)
-                    } else {
-                        (0, 0, 0, String::new(), String::new(), String::new())
-                    };
-                    let rec = ProcEventRecord {
-                        kind: "UID_CHANGE".to_string(),
-                        pid,
-                        ppid,
-                        uid: cur_ruid,
-                        euid: cur_euid,
-                        comm,
-                        exe,
-                        cmdline,
-                        parent_comm,
-                        parent_exe,
-                        timestamp_epoch: now_epoch,
-                    };
-                    let alert = evaluate_uid_event(&rec, ruid, euid);
-                    if alert.is_some() {
-                        out.push((rec, alert));
-                    }
-                }
-                PROC_EVENT_FORK | PROC_EVENT_EXIT => {
-                    // Ignored for noise reduction unless needed
-                }
-                _ => {}
-            }
+            Self::parse_packet(&buf, n as usize, now_epoch, &mut out);
         }
 
         out
+    }
+
+    fn parse_packet(
+        buf: &[u8; 8192],
+        n: usize,
+        now_epoch: u64,
+        out: &mut Vec<(ProcEventRecord, Option<ProcSecurityAlert>)>,
+    ) {
+        let min_hdr = std::mem::size_of::<NlMsgHdr>()
+            + std::mem::size_of::<CnMsgHeader>()
+            + std::mem::size_of::<ProcEventHeader>();
+        if n < min_hdr {
+            return;
+        }
+
+        let cn_offset = std::mem::size_of::<NlMsgHdr>();
+        let cn: CnMsgHeader =
+            unsafe { std::ptr::read_unaligned(buf[cn_offset..].as_ptr() as *const CnMsgHeader) };
+        if cn.id.idx != CN_IDX_PROC || cn.id.val != CN_VAL_PROC {
+            return;
+        }
+
+        let ev_offset = cn_offset + std::mem::size_of::<CnMsgHeader>();
+        let ev: ProcEventHeader =
+            unsafe { std::ptr::read_unaligned(buf[ev_offset..].as_ptr() as *const ProcEventHeader) };
+        let data_offset = ev_offset + std::mem::size_of::<ProcEventHeader>();
+
+        match ev.what {
+            PROC_EVENT_EXEC => {
+                if data_offset + 8 > n {
+                    return;
+                }
+                let pid = i32::from_ne_bytes([
+                    buf[data_offset],
+                    buf[data_offset + 1],
+                    buf[data_offset + 2],
+                    buf[data_offset + 3],
+                ]);
+                let (ppid, uid, euid, comm, exe, cmdline) = read_proc_meta(pid);
+                if comm.is_empty() && exe.is_empty() {
+                    return;
+                }
+                let (_, _, _, parent_comm, parent_exe, _) = if ppid > 0 {
+                    read_proc_meta(ppid)
+                } else {
+                    (0, 0, 0, String::new(), String::new(), String::new())
+                };
+                let rec = ProcEventRecord {
+                    kind: "EXEC".to_string(),
+                    pid,
+                    ppid,
+                    uid,
+                    euid,
+                    comm,
+                    exe,
+                    cmdline,
+                    parent_comm,
+                    parent_exe,
+                    timestamp_epoch: now_epoch,
+                };
+                let alert = evaluate_exec_event(&rec);
+                out.push((rec, alert));
+            }
+            PROC_EVENT_UID => {
+                if data_offset + 16 > n {
+                    return;
+                }
+                let pid = i32::from_ne_bytes([
+                    buf[data_offset],
+                    buf[data_offset + 1],
+                    buf[data_offset + 2],
+                    buf[data_offset + 3],
+                ]);
+                let ruid = u32::from_ne_bytes([
+                    buf[data_offset + 8],
+                    buf[data_offset + 9],
+                    buf[data_offset + 10],
+                    buf[data_offset + 11],
+                ]);
+                let euid = u32::from_ne_bytes([
+                    buf[data_offset + 12],
+                    buf[data_offset + 13],
+                    buf[data_offset + 14],
+                    buf[data_offset + 15],
+                ]);
+                let (ppid, cur_ruid, cur_euid, comm, exe, cmdline) = read_proc_meta(pid);
+                let (_, _, _, parent_comm, parent_exe, _) = if ppid > 0 {
+                    read_proc_meta(ppid)
+                } else {
+                    (0, 0, 0, String::new(), String::new(), String::new())
+                };
+                let rec = ProcEventRecord {
+                    kind: "UID_CHANGE".to_string(),
+                    pid,
+                    ppid,
+                    uid: cur_ruid,
+                    euid: cur_euid,
+                    comm,
+                    exe,
+                    cmdline,
+                    parent_comm,
+                    parent_exe,
+                    timestamp_epoch: now_epoch,
+                };
+                let alert = evaluate_uid_event(&rec, ruid, euid);
+                if alert.is_some() {
+                    out.push((rec, alert));
+                }
+            }
+            PROC_EVENT_FORK | PROC_EVENT_EXIT => {
+                // Ignored for noise reduction unless needed
+            }
+            _ => {}
+        }
     }
 }
 
