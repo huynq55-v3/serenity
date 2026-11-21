@@ -42,7 +42,13 @@ copy_lib_and_deps() {
     local bin="$1"
     ldd "${bin}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\//) print $i}' | sort -u | while read -r lib; do
         [ -f "${lib}" ] || continue
-        local dest="${TARGET_ROOT}${lib}"
+        # Normalize /lib/x86_64-linux-gnu/* into /usr/lib/x86_64-linux-gnu/* so SONAMEs
+        # (like libcap.so.2, libcap-ng.so.0, libc.so.6) always live in one canonical dir.
+        local canon="${lib}"
+        case "${lib}" in
+            /lib/x86_64-linux-gnu/*) canon="/usr${lib}" ;;
+        esac
+        local dest="${TARGET_ROOT}${canon}"
         mkdir -p "$(dirname "${dest}")"
         cp -nL "${lib}" "${dest}" 2>/dev/null || true
     done
@@ -54,11 +60,14 @@ for b in "${COMP_BIN}" "${LOGIN_BIN}" "${SHELL_BIN}" "${ALACRITTY_BIN}"; do
 done
 
 # Also bundle EGL/GLES2/GBM/Mesa DRI + COSMIC/Alacritty runtime shared libraries
-for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
-    [ -d "${libdir}" ] || continue
+# Use only /usr/lib/x86_64-linux-gnu (on usr-merged Ubuntu /lib is a symlink to /usr/lib,
+# looping both duplicates everything and bloats the archive).
+libdir="/usr/lib/x86_64-linux-gnu"
+if [ -d "${libdir}" ]; then
     for pat in \
         "libdl.so*" "libpthread.so*" "librt.so*" "libresolv.so*" "libnss_files.so*" "libnss_dns.so*" \
-        "libEGL*.so*" "libGLESv2*.so*" "libGLdispatch*.so*" "libgbm*.so*" "libgallium*.so*" "libLLVM*.so*" \
+        "libcap.so*" "libcap-ng.so*" \
+        "libEGL*.so*" "libGLESv2*.so*" "libGLdispatch*.so*" "libgbm*.so*" "libgallium*.so*" \
         "libwayland-*.so*" "libxkb*.so*" \
         "libdisplay-info*.so*" "libseat*.so*" "libpixman-1*.so*" "libdav1d*.so*" \
         "libfontconfig*.so*" "libfreetype*.so*" "libsystemd*.so*" \
@@ -86,7 +95,9 @@ for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
             [ -e "$f" ] || continue
             cp -a "$f" "${TARGET_ROOT}${libdir}/dri/" 2>/dev/null || true
         done
-        [ -f "${libdir}/dri/libdril_dri.so" ] && copy_lib_and_deps "${libdir}/dri/libdril_dri.so"
+        for dri_real in "${libdir}/dri/libdril_dri.so" "${libdir}/dri/swrast_dri.so" "${libdir}/dri/iris_dri.so"; do
+            [ -f "${dri_real}" ] && copy_lib_and_deps "${dri_real}"
+        done
     fi
     # Vulkan loader + Intel/Lavapipe/VirtIO ICD drivers (required by Zed IDE GPUI & modern Vulkan apps)
     for vk in libvulkan.so.1 libvulkan_intel.so libvulkan_lvp.so libvulkan_virtio.so; do
@@ -96,7 +107,7 @@ for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
             [ -f "${libdir}/${vk}" ] && copy_lib_and_deps "${libdir}/${vk}"
         fi
     done
-done
+fi
 
 if [ -d /usr/share/vulkan/icd.d ]; then
     mkdir -p "${TARGET_ROOT}/usr/share/vulkan/icd.d"
