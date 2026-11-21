@@ -33,7 +33,7 @@ if [ -n "${missing}" ]; then
     exit 1
 fi
 
-GLIBC_VER="$(ldd --version | head -n 1 | awk '{print $NF}')"
+GLIBC_VER="$(ldd --version | awk 'NR==1 {print $NF}')"
 mkdir -p "${STAGE_DIR}/etc/serenity"
 echo "glibc=${GLIBC_VER} built_on=$(. /etc/os-release && echo "${ID}-${VERSION_ID}")" > "${STAGE_DIR}/etc/serenity/base-info"
 echo "  -> serenity-base: glibc ${GLIBC_VER}, $(du -sh "${STAGE_DIR}" | cut -f1)"
