@@ -253,7 +253,7 @@ fn sync_clock_sntp() -> bool {
 
         let nsec = ((ntp_frac * 1_000_000_000) >> 32) as i64;
         let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
-        ts.tv_sec = unix_sec as libc::time_t;
+        ts.tv_sec = unix_sec as _;
         ts.tv_nsec = nsec as libc::c_long;
         let rc = unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) };
         if rc == 0 {
@@ -444,7 +444,7 @@ impl Timedate1 {
         let secs = target_ns / 1_000_000_000;
         let nsecs = target_ns % 1_000_000_000;
         let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
-        ts.tv_sec = secs as libc::time_t;
+        ts.tv_sec = secs as _;
         ts.tv_nsec = nsecs as libc::c_long;
         let rc = unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) };
         if rc != 0 {
@@ -467,7 +467,7 @@ impl Timedate1 {
         _interactive: bool,
     ) -> fdo::Result<()> {
         self.local_rtc.store(local_rtc, Ordering::Relaxed);
-        let _ = self.local_rtc_changed(&emitter).await;
+        let _ = self.local_r_t_c_changed(&emitter).await;
         Ok(())
     }
 
@@ -485,8 +485,8 @@ impl Timedate1 {
         } else {
             self.ntp_synced.store(false, Ordering::Relaxed);
         }
-        let _ = self.ntp_changed(&emitter).await;
-        let _ = self.ntp_synchronized_changed(&emitter).await;
+        let _ = self.n_t_p_changed(&emitter).await;
+        let _ = self.n_t_p_synchronized_changed(&emitter).await;
         Ok(())
     }
 
