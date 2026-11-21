@@ -95,10 +95,24 @@ disk: init spkg nushell coreutils
 	@chmod +x scripts/build-rootfs.sh
 	@./scripts/build-rootfs.sh disk
 
-disk-gui: desktop-release
+# GNU runtime layer (glibc, Mesa, dbus, seatd, NetworkManager, compositor...) comes from the
+# CI-built `serenity-base` package. LOCAL_BUNDLE=1 restores the old behaviour of copying
+# it from this machine with scripts/bundle-compositor.sh.
+LOCAL_BUNDLE ?= 0
+
+disk-gui: disk
 	@chmod +x scripts/bundle-compositor.sh scripts/preinstall-packages.py
-	@./scripts/bundle-compositor.sh $(BUILD_DIR)/rootfs-stage
+	@if [ "$(LOCAL_BUNDLE)" = "1" ]; then \
+		echo "[rootfs] LOCAL_BUNDLE=1: bundling GNU runtime from this host"; \
+		$(MAKE) desktop-release && ./scripts/bundle-compositor.sh $(BUILD_DIR)/rootfs-stage; \
+	else \
+		python3 scripts/preinstall-packages.py $(BUILD_DIR)/rootfs-stage serenity-base || { \
+			echo "[rootfs] ERROR: serenity-base not in package index. Run the CI workflow for it, or use 'make disk-gui LOCAL_BUNDLE=1'."; \
+			exit 1; }; \
+	fi
 	@python3 scripts/preinstall-packages.py $(BUILD_DIR)/rootfs-stage alacritty cosmic-desktop
+	@python3 scripts/preinstall-packages.py $(BUILD_DIR)/rootfs-stage cosmic-settings cosmic-randr pop-launcher || \
+		echo "[rootfs] WARN: cosmic-settings/cosmic-randr/pop-launcher not in package index yet (run CI)"
 	@python3 scripts/preinstall-packages.py $(BUILD_DIR)/rootfs-stage kmod linux linux-firmware || \
 		echo "[rootfs] WARN: kmod/linux/linux-firmware not in package index yet (run CI); using host modules"
 	@mkdir -p $(BUILD_DIR)/rootfs-stage/lib/modules/serenity $(BUILD_DIR)/rootfs-stage/etc/serenity

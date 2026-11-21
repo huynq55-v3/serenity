@@ -1,0 +1,27 @@
+[package]
+name = "pop-launcher"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "pop-launcher service + plugins (apps, files, calc, web, terminal...) behind cosmic-launcher and cosmic-app-library"
+deps = []
+
+[source]
+type = "custom"
+script = """
+cd "${WORK_DIR}"
+git clone --depth 1 https://github.com/pop-os/launcher.git launcher
+cd launcher
+cargo build --release -p pop-launcher-bin
+
+# Same layout as upstream `just rootdir=<stage> install`
+install -Dm0755 target/release/pop-launcher-bin "${STAGE_DIR}/usr/bin/pop-launcher"
+PLUGIN_DIR="${STAGE_DIR}/usr/lib/pop-launcher/plugins"
+for plugin in calc desktop_entries files find pop_shell pulse recent scripts terminal web cosmic_toplevel; do
+    [ -d "plugins/src/${plugin}" ] || continue
+    mkdir -p "${PLUGIN_DIR}/${plugin}"
+    install -m0644 plugins/src/${plugin}/*.ron "${PLUGIN_DIR}/${plugin}/"
+    ln -sf /usr/bin/pop-launcher "${PLUGIN_DIR}/${plugin}/$(echo "${plugin}" | sed 's/_/-/')"
+done
+mkdir -p "${STAGE_DIR}/usr/lib/pop-launcher/scripts"
+cp -r scripts/. "${STAGE_DIR}/usr/lib/pop-launcher/scripts/"
+"""

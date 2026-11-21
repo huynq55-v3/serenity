@@ -1,0 +1,40 @@
+[package]
+name = "serenity-base"
+# Bump to rebuild in CI (e.g. after changing crates/compositor, crates/shell-ui,
+# crates/sysd or scripts/bundle-compositor.sh, or to pick up Ubuntu security updates).
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "Serenity GNU runtime layer: glibc + ld-linux, Mesa (EGL/GBM/DRI/Vulkan), Wayland/xkb, PipeWire/Pulse libs, dbus, seatd, NetworkManager + wpa_supplicant, dash/bash, zoneinfo, serenity-compositor/login/shell/sysd"
+deps = []
+
+[source]
+type = "custom"
+script = """
+cd "${REPO_DIR}"
+echo "  -> Building serenity-compositor + serenity-shell (glibc) and serenity-sysd (musl)"
+cargo build --release -p serenity-compositor -p serenity-shell
+CC_x86_64_unknown_linux_musl=clang cargo build --release --target x86_64-unknown-linux-musl -p serenity-sysd
+
+echo "  -> Running bundle-compositor.sh against the CI image (pinned Ubuntu 24.04)"
+bash scripts/bundle-compositor.sh "${STAGE_DIR}"
+
+# Fail the build if an apt package was missing on the runner instead of shipping a broken base.
+missing=""
+for f in lib64/ld-linux-x86-64.so.2 bin/sh bin/bash \
+         usr/bin/serenity-compositor usr/bin/serenity-sysd \
+         usr/bin/dbus-daemon usr/bin/seatd usr/bin/NetworkManager usr/bin/wpa_supplicant usr/bin/nmcli \
+         usr/share/zoneinfo; do
+    [ -e "${STAGE_DIR}/${f}" ] || missing="${missing} ${f}"
+done
+ls "${STAGE_DIR}"/lib/x86_64-linux-gnu/libc.so.6 "${STAGE_DIR}"/usr/lib/x86_64-linux-gnu/libc.so.6 >/dev/null 2>&1 || missing="${missing} libc.so.6"
+ls "${STAGE_DIR}"/usr/lib/x86_64-linux-gnu/dri/*_dri.so >/dev/null 2>&1 || ls "${STAGE_DIR}"/lib/x86_64-linux-gnu/dri/*_dri.so >/dev/null 2>&1 || missing="${missing} mesa-dri"
+if [ -n "${missing}" ]; then
+    echo "ERROR: serenity-base is missing:${missing}" >&2
+    exit 1
+fi
+
+GLIBC_VER="$(ldd --version | head -n 1 | awk '{print $NF}')"
+mkdir -p "${STAGE_DIR}/etc/serenity"
+echo "glibc=${GLIBC_VER} built_on=$(. /etc/os-release && echo "${ID}-${VERSION_ID}")" > "${STAGE_DIR}/etc/serenity/base-info"
+echo "  -> serenity-base: glibc ${GLIBC_VER}, $(du -sh "${STAGE_DIR}" | cut -f1)"
+"""

@@ -1,0 +1,14 @@
+[package]
+name = "cosmic-randr"
+version = "0.1.0"
+arch = "x86_64-gnu"
+description = "COSMIC display configuration CLI (used by cosmic-settings Displays page)"
+deps = []
+
+[source]
+type = "cargo-gnu"
+git = "https://github.com/pop-os/cosmic-randr.git"
+package = "cosmic-randr-cli"
+
+[install]
+files = { "cosmic-randr" = "usr/bin/cosmic-randr" }
