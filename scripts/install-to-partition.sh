@@ -60,6 +60,7 @@ if [ "${FSTYPE}" != "ext4" ]; then
 fi
 
 UUID="$(blkid -o value -s UUID "${PART}")"
+PARTUUID="$(blkid -o value -s PARTUUID "${PART}" 2>/dev/null || true)"
 SIZE="$(lsblk -no SIZE "${PART}")"
 
 echo "============================================================"
@@ -103,9 +104,16 @@ if [ -x "${ROOT_DIR}/target/release/serenity-compositor" ]; then
 fi
 
 mkdir -p "${MNT}/boot"
+USE_INITRD=0
+if [ -e "${STAGE_DIR}/boot/vmlinuz-serenity" ]; then
+    # Serenity's own kernel package (linux): drivers are built-in or loaded by
+    # serenity-init through kmod, firmware comes from the linux-firmware package.
+    echo "[install] Using Serenity kernel $(readlink "${STAGE_DIR}/boot/vmlinuz-serenity") (no initrd, no host modules)"
+    SERENITY_KERNEL=1
+else
+SERENITY_KERNEL=0
 echo "[install] Copying host kernel + initrd (for NVMe/USB-HID/DRM/Wi-Fi drivers on bare metal)..."
 cp -L "${HOST_KERNEL}" "${MNT}/boot/vmlinuz-serenity"
-USE_INITRD=0
 if [ -r "${HOST_INITRD}" ]; then
     cp -L "${HOST_INITRD}" "${MNT}/boot/initrd-serenity.img"
     USE_INITRD=1
@@ -173,6 +181,7 @@ for sof_dir in /lib/firmware/intel/sof*; do
 done
 cp -a /lib/firmware/iwlwifi* "${MNT}/lib/firmware/" 2>/dev/null || true
 cp -a /lib/firmware/regulatory.db* "${MNT}/lib/firmware/" 2>/dev/null || true
+fi
 
 # Ensure root ownership and setuid bit on /init so non-root UID 1000 can invoke poweroff/reboot/cosmic-osd
 chown -R 0:0 "${MNT}"
@@ -180,12 +189,19 @@ chmod 4755 "${MNT}/init"
 chown -R 1000:1000 "${MNT}/home/serenity" 2>/dev/null || true
 sync
 
+# Without an initrd the kernel can only resolve root=PARTUUID=, not root=UUID=.
+if [ "${USE_INITRD}" -eq 0 ] && [ -n "${PARTUUID}" ]; then
+    ROOT_ARG="root=PARTUUID=${PARTUUID} rootwait"
+else
+    ROOT_ARG="root=UUID=${UUID}"
+fi
+
 GRUB_ENTRY=$(cat <<EOF
 menuentry "Serenity Linux 0.1.0 (Rust + Nushell)" {
     insmod part_gpt
     insmod ext2
     search --no-floppy --fs-uuid --set=root ${UUID}
-    linux /boot/vmlinuz-serenity root=UUID=${UUID} rw init=/init
+    linux /boot/vmlinuz-serenity ${ROOT_ARG} rw init=/init
 $( [ "${USE_INITRD}" -eq 1 ] && echo "    initrd /boot/initrd-serenity.img" )
 }
 EOF

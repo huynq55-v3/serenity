@@ -1,6 +1,6 @@
 TARGET_MUSL := x86_64-unknown-linux-musl
 BUILD_DIR   := build
-KERNEL      ?= $(shell test -r $(BUILD_DIR)/bzImage && echo $(BUILD_DIR)/bzImage || echo /boot/vmlinuz_rust)
+KERNEL      ?= $(shell if test -r $(BUILD_DIR)/rootfs-stage/boot/vmlinuz-serenity; then echo $(BUILD_DIR)/rootfs-stage/boot/vmlinuz-serenity; elif test -r $(BUILD_DIR)/bzImage; then echo $(BUILD_DIR)/bzImage; else echo /boot/vmlinuz_rust; fi)
 INITRAMFS   := $(BUILD_DIR)/initramfs.cpio.gz
 DISK_IMG    := $(BUILD_DIR)/disk.img
 DISK_GUI    := $(BUILD_DIR)/disk-gui.img
@@ -99,8 +99,14 @@ disk-gui: desktop-release
 	@chmod +x scripts/bundle-compositor.sh scripts/preinstall-packages.py
 	@./scripts/bundle-compositor.sh $(BUILD_DIR)/rootfs-stage
 	@python3 scripts/preinstall-packages.py $(BUILD_DIR)/rootfs-stage alacritty cosmic-desktop
+	@python3 scripts/preinstall-packages.py $(BUILD_DIR)/rootfs-stage kmod linux linux-firmware || \
+		echo "[rootfs] WARN: kmod/linux/linux-firmware not in package index yet (run CI); using host modules"
 	@mkdir -p $(BUILD_DIR)/rootfs-stage/lib/modules/serenity $(BUILD_DIR)/rootfs-stage/etc/serenity
-	@KVER=$$(uname -r); \
+	@if [ -e $(BUILD_DIR)/rootfs-stage/boot/vmlinuz-serenity ]; then \
+		echo "[rootfs] Serenity kernel package installed: drivers load via kmod coldplug/hotplug"; \
+		: > $(BUILD_DIR)/rootfs-stage/etc/serenity/modules.load; \
+	else \
+	KVER=$$(uname -r); \
 	: > $(BUILD_DIR)/rootfs-stage/etc/serenity/modules.load; \
 	for m in virtio_gpu virtio_input psmouse; do \
 		modprobe -S "$$KVER" --show-depends "$$m" 2>/dev/null | awk '$$1=="insmod"{print $$2}' | while read -r p; do \
@@ -109,12 +115,13 @@ disk-gui: desktop-release
 			zstd -dq -c "$$p" > "$(BUILD_DIR)/rootfs-stage/lib/modules/serenity/$$base" 2>/dev/null || cp "$$p" "$(BUILD_DIR)/rootfs-stage/lib/modules/serenity/$$base"; \
 			echo "/lib/modules/serenity/$$base" >> $(BUILD_DIR)/rootfs-stage/etc/serenity/modules.load; \
 		done; \
-	done
+	done; \
+	fi
 	@rm -f $(DISK_GUI)
-	@truncate -s 2048M $(DISK_GUI)
+	@truncate -s 6144M $(DISK_GUI)
 	@/usr/sbin/mke2fs -q -t ext4 -d $(BUILD_DIR)/rootfs-stage -L SERENITY -F $(DISK_GUI)
 	@printf 'sif init uid 0\nsif init gid 0\nsif init mode 0104755\n' | /usr/sbin/debugfs -w $(DISK_GUI) >/dev/null 2>&1
-	@echo "[rootfs] Built GUI ext4 disk: $(DISK_GUI) (2048M)"
+	@echo "[rootfs] Built GUI ext4 disk: $(DISK_GUI) (6144M)"
 
 initramfs: init spkg nushell coreutils
 	@chmod +x scripts/build-rootfs.sh

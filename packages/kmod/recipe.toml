@@ -1,0 +1,41 @@
+[package]
+name = "kmod"
+version = "1.0.0"
+arch = "x86_64-gnu"
+description = "kmod (modprobe, insmod, rmmod, lsmod, modinfo, depmod) used by serenity-init for driver coldplug/hotplug"
+deps = []
+
+[source]
+type = "custom"
+script = """
+KMOD_BIN="$(command -v kmod || true)"
+if [ -z "${KMOD_BIN}" ]; then
+    echo "ERROR: kmod not installed on build host" >&2
+    exit 1
+fi
+
+mkdir -p "${STAGE_DIR}/usr/bin" "${STAGE_DIR}/sbin" "${STAGE_DIR}/usr/sbin" "${STAGE_DIR}/etc/modprobe.d"
+cp -L "${KMOD_BIN}" "${STAGE_DIR}/usr/bin/kmod"
+chmod 0755 "${STAGE_DIR}/usr/bin/kmod"
+
+# Shared libs (libzstd, liblzma, libcrypto...) except core glibc, which the base rootfs ships.
+ldd "${KMOD_BIN}" | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+    [ -f "${lib}" ] || continue
+    case "$(basename "${lib}")" in
+        ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
+    esac
+    mkdir -p "${STAGE_DIR}$(dirname "${lib}")"
+    cp -L "${lib}" "${STAGE_DIR}${lib}"
+done
+
+for tool in modprobe insmod rmmod lsmod modinfo depmod; do
+    ln -sf /usr/bin/kmod "${STAGE_DIR}/sbin/${tool}"
+    ln -sf /usr/bin/kmod "${STAGE_DIR}/usr/sbin/${tool}"
+done
+ln -sf /usr/bin/kmod "${STAGE_DIR}/usr/bin/lsmod"
+"""
+
+[install.inline]
+"etc/modprobe.d/serenity.conf" = """# Serenity defaults. Add 'blacklist <module>' lines here; serenity-init runs modprobe -b.
+blacklist pcspkr
+"""
