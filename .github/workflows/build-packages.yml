@@ -124,7 +124,7 @@ jobs:
               elif [ "${{ matrix.package }}" = "pipewire" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends \
-                  zstd pipewire pipewire-pulse pipewire-alsa wireplumber \
+                  zstd pipewire pipewire-bin pipewire-pulse pipewire-alsa wireplumber \
                   alsa-ucm-conf alsa-utils libspa-0.2-modules
               elif [ "${{ matrix.package }}" = "tzdata" ]; then
                 sudo apt-get update
@@ -186,7 +186,7 @@ jobs:
                 sudo apt-get install -y --no-install-recommends zstd kmod
               elif [ "${{ matrix.package }}" = "linux-firmware" ]; then
                 sudo apt-get update
-                sudo apt-get install -y --no-install-recommends zstd git make rdfind parallel python3
+                sudo apt-get install -y --no-install-recommends zstd git make rdfind parallel python3 curl rsync
               else
                 command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
               fi

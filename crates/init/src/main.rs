@@ -572,7 +572,7 @@ fn setup_desktop_permissions() {
         libc::chmod(b"/dev/pts/ptmx\0".as_ptr() as *const libc::c_char, 0o666);
     }
 
-    for (dir_path, gid) in [("/dev/dri", 44u32), ("/dev/input", 104u32), ("/dev/snd", 29u32)] {
+    for (dir_path, gid) in [("/dev/dri", 44u32), ("/dev/input", 104u32)] {
         if let Ok(entries) = fs::read_dir(dir_path) {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
@@ -588,31 +588,7 @@ fn setup_desktop_permissions() {
         }
     }
 
-    // Tag ALSA card & control devices in /run/udev/data so PipeWire/WirePlumber
-    // (spa/alsa-udev checks SOUND_INITIALIZED=1) discovers sound cards without systemd-udevd.
-    let _ = fs::create_dir_all("/run/udev/data");
-    if let Ok(entries) = fs::read_dir("/sys/class/sound") {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let Some(name_str) = name.to_str() else { continue };
-            if name_str.starts_with("card") {
-                let udev_data = format!(
-                    "E:SOUND_INITIALIZED=1\nE:ID_SEAT=seat0\nE:ID_FOR_SEAT=sound-{}\nG:seat\n",
-                    name_str
-                );
-                let _ = fs::write(format!("/run/udev/data/+sound:{}", name_str), udev_data);
-            } else if name_str.starts_with("controlC") {
-                if let Ok(dev_num) = fs::read_to_string(entry.path().join("dev")) {
-                    let dev_num = dev_num.trim();
-                    let udev_data = format!(
-                        "E:SOUND_INITIALIZED=1\nE:ID_SEAT=seat0\nE:ID_FOR_SEAT=sound-{}\nG:seat\n",
-                        name_str
-                    );
-                    let _ = fs::write(format!("/run/udev/data/c{}", dev_num), udev_data);
-                }
-            }
-        }
-    }
+    kmod::setup_sound_devices();
 
     // Grant video group (gid 44) write access to /sys/class/backlight/*/brightness as fallback
     // and tag backlight devices in /run/udev/data/+backlight:<name> so libudev / cosmic-settings-daemon
@@ -742,8 +718,9 @@ fn main() {
         if let Some(sock) = uevent_sock {
             kmod::spawn_hotplug_thread(sock);
         }
-        // GPU drivers probe asynchronously (firmware load); give them time before seat setup.
+        // GPU & audio drivers probe asynchronously (firmware load); give them time before seat setup.
         kmod::wait_for_gpu(3000);
+        kmod::wait_for_sound(2000);
     }
     if kmods_loaded > 0 {
         // Brief settle time for Wi-Fi / DRM device nodes after module load.

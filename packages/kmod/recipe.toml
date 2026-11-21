@@ -1,6 +1,6 @@
 [package]
 name = "kmod"
-version = "1.0.0"
+version = "1.0.1"
 arch = "x86_64-gnu"
 description = "kmod (modprobe, insmod, rmmod, lsmod, modinfo, depmod) used by serenity-init for driver coldplug/hotplug"
 deps = []
@@ -38,4 +38,5 @@ ln -sf /usr/bin/kmod "${STAGE_DIR}/usr/bin/lsmod"
 [install.inline]
 "etc/modprobe.d/serenity.conf" = """# Serenity defaults. Add 'blacklist <module>' lines here; serenity-init runs modprobe -b.
 blacklist pcspkr
+blacklist snd_pcsp
 """

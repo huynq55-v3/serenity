@@ -1,8 +1,8 @@
 [package]
 name = "pipewire"
-version = "1.0.0"
+version = "1.0.1"
 arch = "x86_64-gnu"
-description = "PipeWire + WirePlumber + PipeWire-Pulse audio server with ALSA UCM2 configs"
+description = "PipeWire + WirePlumber + PipeWire-Pulse audio server with ALSA UCM2 & ACP configs"
 deps = ["clibrary"]
 
 [source]
@@ -17,7 +17,11 @@ collect_ldd_deps() {
         case "$(basename "${lib}")" in
             ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
         esac
-        local ldst="${STAGE_DIR}${lib}"
+        local norm="${lib}"
+        case "${norm}" in
+            /lib/x86_64-linux-gnu/*) norm="/usr${norm}" ;;
+        esac
+        local ldst="${STAGE_DIR}${norm}"
         mkdir -p "$(dirname "${ldst}")"
         [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
     done
@@ -64,22 +68,32 @@ done
 for mod_dir in \
     /usr/lib/x86_64-linux-gnu/spa-0.2 \
     /usr/lib/x86_64-linux-gnu/pipewire-0.3 \
-    /usr/lib/x86_64-linux-gnu/wireplumber-0.5 \
+    /usr/lib/x86_64-linux-gnu/wireplumber-* \
     /usr/lib/x86_64-linux-gnu/alsa-lib; do
     copy_dir_with_deps "${mod_dir}"
 done
 
-# Runtime configs, WirePlumber Lua scripts & ALSA UCM2 profiles (required for Intel SOF audio)
+# Runtime configs, WirePlumber Lua scripts, ALSA UCM2 & ACP profiles (required for Intel SOF & USB/HDA audio)
 for data_dir in \
     /usr/share/pipewire \
     /usr/share/wireplumber \
     /usr/share/alsa \
+    /usr/share/alsa-card-profile \
     /etc/alsa; do
     if [ -d "${data_dir}" ]; then
         mkdir -p "${STAGE_DIR}$(dirname "${data_dir}")"
         cp -a "${data_dir}" "${STAGE_DIR}$(dirname "${data_dir}")/"
     fi
 done
+
+if ! compgen -G "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/wireplumber-*/libwireplumber-module-*.so" >/dev/null; then
+    echo "ERROR: missing WirePlumber modules under ${STAGE_DIR}/usr/lib/x86_64-linux-gnu/wireplumber-*" >&2
+    exit 1
+fi
+if [ ! -d "${STAGE_DIR}/usr/share/alsa-card-profile/mixer" ]; then
+    echo "ERROR: missing ALSA Card Profile configs at ${STAGE_DIR}/usr/share/alsa-card-profile/mixer" >&2
+    exit 1
+fi
 """
 
 [install.scripts]

@@ -14,7 +14,7 @@
 //! listed in /etc/serenity/modules.load via finit_module(2), like before.
 
 use std::collections::HashSet;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::fs::{self, File};
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -26,6 +26,7 @@ const MODULES_LOAD_PATH: &str = "/etc/serenity/modules.load";
 const MODPROBE: &str = "/sbin/modprobe";
 const COLDPLUG_PASSES: usize = 4;
 const MODPROBE_BATCH: usize = 256;
+const AUDIO_GID: libc::gid_t = 29;
 
 pub fn kernel_release() -> String {
     unsafe {
@@ -182,6 +183,134 @@ fn modalias_of_add_event(buf: &[u8]) -> Option<String> {
     }
 }
 
+struct SoundEvent {
+    devname: Option<String>,
+    devpath: Option<String>,
+    major: Option<String>,
+    minor: Option<String>,
+}
+
+fn chown_chmod_audio(path: &Path) {
+    if let Ok(c_path) = CString::new(path.to_string_lossy().as_bytes()) {
+        unsafe {
+            libc::chown(c_path.as_ptr(), 0, AUDIO_GID);
+            libc::chmod(c_path.as_ptr(), 0o660);
+        }
+    }
+}
+
+fn write_sound_udev_tag(udev_file: &str, name_str: &str) {
+    let _ = fs::create_dir_all("/run/udev/data");
+    let udev_data = format!(
+        "E:SOUND_INITIALIZED=1\nE:ID_SEAT=seat0\nE:ID_FOR_SEAT=sound-{}\nG:seat\n",
+        name_str
+    );
+    let _ = fs::write(format!("/run/udev/data/{}", udev_file), udev_data);
+}
+
+/// Grants `audio` group access on `/dev/snd/*` and writes `/run/udev/data` tags so
+/// PipeWire/WirePlumber (`spa/alsa-udev` checks `SOUND_INITIALIZED=1`) discovers cards without udevd.
+pub fn setup_sound_devices() {
+    if let Ok(entries) = fs::read_dir("/dev/snd") {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                continue;
+            }
+            chown_chmod_audio(&entry.path());
+        }
+    }
+
+    if let Ok(entries) = fs::read_dir("/sys/class/sound") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else { continue };
+            if name_str.starts_with("card") {
+                write_sound_udev_tag(&format!("+sound:{}", name_str), name_str);
+            } else if name_str.starts_with("controlC") {
+                if let Ok(dev_num) = fs::read_to_string(entry.path().join("dev")) {
+                    let dev_num = dev_num.trim();
+                    if !dev_num.is_empty() {
+                        write_sound_udev_tag(&format!("c{}", dev_num), name_str);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn parse_sound_event(buf: &[u8]) -> Option<SoundEvent> {
+    let mut is_sound = false;
+    let mut action_ok = false;
+    let mut devname = None;
+    let mut devpath = None;
+    let mut major = None;
+    let mut minor = None;
+
+    for field in buf.split(|b| *b == 0) {
+        if field == b"SUBSYSTEM=sound" {
+            is_sound = true;
+        } else if field == b"ACTION=add" || field == b"ACTION=change" {
+            action_ok = true;
+        } else if let Some(v) = field.strip_prefix(b"DEVNAME=") {
+            let s = String::from_utf8_lossy(v).into_owned();
+            if !s.is_empty() {
+                devname = Some(s);
+            }
+        } else if let Some(v) = field.strip_prefix(b"DEVPATH=") {
+            let s = String::from_utf8_lossy(v).into_owned();
+            if !s.is_empty() {
+                devpath = Some(s);
+            }
+        } else if let Some(v) = field.strip_prefix(b"MAJOR=") {
+            let s = String::from_utf8_lossy(v).into_owned();
+            if !s.is_empty() {
+                major = Some(s);
+            }
+        } else if let Some(v) = field.strip_prefix(b"MINOR=") {
+            let s = String::from_utf8_lossy(v).into_owned();
+            if !s.is_empty() {
+                minor = Some(s);
+            }
+        }
+    }
+
+    if is_sound && action_ok {
+        Some(SoundEvent {
+            devname,
+            devpath,
+            major,
+            minor,
+        })
+    } else {
+        None
+    }
+}
+
+fn handle_sound_event(ev: &SoundEvent) {
+    if let Some(devname) = ev.devname.as_deref() {
+        let rel = devname.trim_start_matches('/');
+        if !rel.is_empty() {
+            chown_chmod_audio(&Path::new("/dev").join(rel));
+        }
+        let base = Path::new(rel)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if base.starts_with("controlC") {
+            if let (Some(maj), Some(min)) = (ev.major.as_deref(), ev.minor.as_deref()) {
+                write_sound_udev_tag(&format!("c{}:{}", maj, min), base);
+            }
+        }
+    }
+    if let Some(devpath) = ev.devpath.as_deref() {
+        if let Some(base) = devpath.trim_end_matches('/').rsplit('/').next() {
+            if base.starts_with("card") {
+                write_sound_udev_tag(&format!("+sound:{}", base), base);
+            }
+        }
+    }
+}
+
 /// Background hotplug loop. Children are spawned without waiting: PID 1's main
 /// loop reaps them via waitpid(-1).
 pub fn spawn_hotplug_thread(sock: OwnedFd) {
@@ -212,6 +341,7 @@ fn hotplug_loop(fd: RawFd, _keep_alive: OwnedFd) {
                             .stderr(Stdio::null())
                             .spawn();
                     }
+                    setup_sound_devices();
                     continue;
                 }
                 _ => {
@@ -227,6 +357,9 @@ fn hotplug_loop(fd: RawFd, _keep_alive: OwnedFd) {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn();
+        }
+        if let Some(ev) = parse_sound_event(&buf[..n as usize]) {
+            handle_sound_event(&ev);
         }
     }
 }
@@ -262,6 +395,50 @@ pub fn wait_for_gpu(max_ms: u64) {
     let step = 50;
     let mut waited = 0;
     while waited < max_ms && !has_drm_card() {
+        thread::sleep(std::time::Duration::from_millis(step));
+        waited += step;
+    }
+}
+
+/// True if a PCI audio controller (class 0x0401xx or 0x0403xx) exists.
+fn has_pci_audio_device() -> bool {
+    let Ok(entries) = fs::read_dir("/sys/bus/pci/devices") else { return false };
+    entries.flatten().any(|e| {
+        fs::read_to_string(e.path().join("class"))
+            .map(|c| {
+                let c = c.trim();
+                c.starts_with("0x0401") || c.starts_with("0x0403")
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn has_sound_card() -> bool {
+    fs::read_dir("/sys/class/sound")
+        .map(|it| {
+            it.flatten().any(|e| {
+                let n = e.file_name();
+                let n = n.to_string_lossy();
+                if !n.starts_with("card") {
+                    return false;
+                }
+                fs::read_to_string(e.path().join("id"))
+                    .map(|id| id.trim() != "pcsp")
+                    .unwrap_or(true)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Audio drivers (e.g. Intel SOF) load DSP firmware and probe asynchronously.
+/// Wait up to `max_ms` for a non-pcsp ALSA card before desktop permission setup.
+pub fn wait_for_sound(max_ms: u64) {
+    if !has_pci_audio_device() {
+        return;
+    }
+    let step = 50;
+    let mut waited = 0;
+    while waited < max_ms && !has_sound_card() {
         thread::sleep(std::time::Duration::from_millis(step));
         waited += step;
     }
@@ -330,5 +507,28 @@ mod tests {
     fn ignores_remove_and_events_without_modalias() {
         assert_eq!(modalias_of_add_event(b"remove@/x\0ACTION=remove\0MODALIAS=usb:v1\0"), None);
         assert_eq!(modalias_of_add_event(b"add@/x\0ACTION=add\0SUBSYSTEM=block\0"), None);
+    }
+
+    #[test]
+    fn parses_sound_add_and_change_events() {
+        let ctl = b"add@/devices/pci0000:00/0000:00:1f.3/sound/card0/controlC0\0ACTION=add\0DEVPATH=/devices/pci0000:00/0000:00:1f.3/sound/card0/controlC0\0SUBSYSTEM=sound\0MAJOR=116\0MINOR=3\0DEVNAME=snd/controlC0\0";
+        let ev = parse_sound_event(ctl).expect("controlC0 add event");
+        assert_eq!(ev.devname.as_deref(), Some("snd/controlC0"));
+        assert_eq!(ev.major.as_deref(), Some("116"));
+        assert_eq!(ev.minor.as_deref(), Some("3"));
+
+        let card = b"change@/devices/pci0000:00/0000:00:1f.3/sound/card0\0ACTION=change\0DEVPATH=/devices/pci0000:00/0000:00:1f.3/sound/card0\0SUBSYSTEM=sound\0";
+        let ev = parse_sound_event(card).expect("card0 change event");
+        assert_eq!(ev.devpath.as_deref(), Some("/devices/pci0000:00/0000:00:1f.3/sound/card0"));
+        assert_eq!(ev.devname, None);
+    }
+
+    #[test]
+    fn ignores_sound_remove_and_non_sound_events() {
+        let rem = b"remove@/devices/x/sound/card0\0ACTION=remove\0SUBSYSTEM=sound\0DEVPATH=/devices/x/sound/card0\0";
+        assert!(parse_sound_event(rem).is_none());
+
+        let input = b"add@/devices/x/input/event0\0ACTION=add\0SUBSYSTEM=input\0DEVNAME=input/event0\0";
+        assert!(parse_sound_event(input).is_none());
     }
 }

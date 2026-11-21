@@ -2,9 +2,9 @@
 name = "linux-firmware"
 # Upstream tag (YYYYMMDD) from git.kernel.org linux-firmware. Bump to refresh firmware.
 # "latest" also works (newest tag at build time) but CI will not notice new tags by itself.
-version = "20260810"
+version = "20260810-sof2026.09.2"
 arch = "any"
-description = "Complete linux-firmware tree (zstd-compressed, deduplicated) for Wi-Fi, GPU, Bluetooth, audio and NIC drivers"
+description = "Complete linux-firmware tree + Intel SOF audio firmware/topologies (zstd-compressed, deduplicated)"
 deps = []
 
 [source]
@@ -12,7 +12,11 @@ type = "custom"
 script = """
 REPO="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git"
 cd "${WORK_DIR}"
-TAG="${PKG_VERSION}"
+TAG="${PKG_VERSION%%-*}"
+case "${PKG_VERSION}" in
+    *-sof*) SOF_VER="${PKG_VERSION#*-sof}" ;;
+    *)      SOF_VER="2026.09.2" ;;
+esac
 if [ "${TAG}" = "latest" ]; then
     TAG="$(git ls-remote --tags --refs "${REPO}" | awk -F/ '{print $NF}' | grep -E '^[0-9]{8}$' | sort | tail -n 1)"
 fi
@@ -27,5 +31,138 @@ if command -v rdfind >/dev/null 2>&1; then
 fi
 cp WHENCE "${STAGE_DIR}/lib/firmware/WHENCE"
 echo "${TAG}" > "${STAGE_DIR}/lib/firmware/.serenity-firmware-tag"
+
+# Upstream linux-firmware does not include Intel Sound Open Firmware (SOF) DSP images/topologies.
+SOF_TAR="sof-bin-${SOF_VER}.tar.gz"
+SOF_URL="https://github.com/thesofproject/sof-bin/releases/download/v${SOF_VER}/${SOF_TAR}"
+echo "  -> Intel SOF firmware v${SOF_VER} (${SOF_URL})"
+curl -fsSL "${SOF_URL}" -o "${WORK_DIR}/${SOF_TAR}"
+mkdir -p "${WORK_DIR}/sof-extract" "${STAGE_DIR}/lib/firmware/intel" "${WORK_DIR}/sof-tools"
+tar -xf "${WORK_DIR}/${SOF_TAR}" -C "${WORK_DIR}/sof-extract"
+SOF_INSTALLER="$(find "${WORK_DIR}/sof-extract" -maxdepth 2 -name install.sh | head -n 1)"
+if [ -z "${SOF_INSTALLER}" ]; then
+    echo "ERROR: install.sh not found in ${SOF_TAR}" >&2
+    exit 1
+fi
+(
+    cd "$(dirname "${SOF_INSTALLER}")"
+    FW_DEST="${STAGE_DIR}/lib/firmware/intel" TOOLS_DEST="${WORK_DIR}/sof-tools" ./install.sh
+)
+echo "${SOF_VER}" > "${STAGE_DIR}/lib/firmware/.serenity-sof-version"
+
+# Compress SOF firmware/topology files with zstd to match linux-firmware and update symlinks.
+python3 - "${STAGE_DIR}" "${STAGE_DIR}/lib/firmware/intel" <<'PY'
+import os
+import pathlib
+import subprocess
+import sys
+
+stage_root = pathlib.Path(sys.argv[1]).resolve()
+intel_dir = pathlib.Path(sys.argv[2])
+exts = (".ri", ".tplg", ".ldc", ".mnd", ".bin")
+
+sof_roots = sorted(intel_dir.glob("sof*"))
+if not sof_roots:
+    raise SystemExit(f"ERROR: no sof* entries found under {intel_dir}")
+
+def normalize_abs_symlink(p):
+    raw = os.readlink(p)
+    if not os.path.isabs(raw):
+        return
+    target = pathlib.Path(raw)
+    try:
+        target.relative_to(stage_root)
+    except ValueError:
+        raise SystemExit(f"ERROR: absolute symlink outside stage: {p} -> {raw}")
+    rel = os.path.relpath(target, p.parent)
+    p.unlink()
+    p.symlink_to(rel)
+
+real_dirs = set()
+for root in sof_roots:
+    if root.is_symlink():
+        normalize_abs_symlink(root)
+    resolved = root.resolve()
+    if resolved.is_dir():
+        real_dirs.add(resolved)
+
+for d in sorted(real_dirs):
+    for dirpath, dirnames, filenames in os.walk(d, followlinks=False):
+        dp = pathlib.Path(dirpath)
+        for name in dirnames + filenames:
+            p = dp / name
+            if p.is_symlink():
+                normalize_abs_symlink(p)
+
+regular_files = set()
+all_symlinks = []
+for root in sof_roots:
+    if root.is_symlink():
+        try:
+            root.resolve(strict=True)
+        except OSError as exc:
+            raise SystemExit(f"ERROR: broken SOF top-level symlink {root}: {exc}")
+for d in sorted(real_dirs):
+    for dirpath, dirnames, filenames in os.walk(d, followlinks=False):
+        dp = pathlib.Path(dirpath)
+        for name in dirnames + filenames:
+            p = dp / name
+            if p.is_symlink():
+                try:
+                    resolved = p.resolve(strict=True)
+                except OSError as exc:
+                    raise SystemExit(f"ERROR: broken SOF symlink {p}: {exc}")
+                all_symlinks.append((p, os.readlink(p), resolved))
+            elif p.is_file() and p.name.endswith(exts):
+                regular_files.add(p.resolve())
+
+files_sorted = sorted(regular_files)
+for i in range(0, len(files_sorted), 200):
+    chunk = [str(x) for x in files_sorted[i:i + 200]]
+    subprocess.run(["zstd", "-19", "-q", "-T0", "--rm", "--", *chunk], check=True)
+
+for link_path, raw_target, resolved in all_symlinks:
+    if resolved in regular_files:
+        new_link = link_path.with_name(link_path.name + ".zst")
+        new_target = raw_target + ".zst"
+        link_path.unlink()
+        if new_link.exists() or new_link.is_symlink():
+            new_link.unlink()
+        new_link.symlink_to(new_target)
+
+for req in ("sof", "sof-tplg", "sof-ipc4", "sof-ipc4-tplg"):
+    req_path = intel_dir / req
+    if not req_path.is_dir():
+        raise SystemExit(f"ERROR: missing required SOF directory: {req_path}")
+
+tgl_candidates = (
+    intel_dir / "sof" / "sof-tgl.ri.zst",
+    intel_dir / "sof-ipc4" / "tgl" / "sof-tgl.ri.zst",
+)
+if not any(p.is_file() for p in tgl_candidates):
+    raise SystemExit("ERROR: missing sof-tgl.ri.zst in sof/ or sof-ipc4/tgl/")
+
+final_dirs = set()
+for root in sorted(intel_dir.glob("sof*")):
+    if root.is_symlink():
+        raw = os.readlink(root)
+        if os.path.isabs(raw) or not root.exists():
+            raise SystemExit(f"ERROR: invalid SOF symlink remains: {root} -> {raw}")
+    res = root.resolve()
+    if res.is_dir():
+        final_dirs.add(res)
+for d in sorted(final_dirs):
+    for dirpath, dirnames, filenames in os.walk(d, followlinks=False):
+        dp = pathlib.Path(dirpath)
+        for name in dirnames + filenames:
+            p = dp / name
+            if p.is_symlink():
+                raw = os.readlink(p)
+                if os.path.isabs(raw) or not p.exists():
+                    raise SystemExit(f"ERROR: invalid SOF symlink remains: {p} -> {raw}")
+
+print(f"  -> SOF firmware: compressed {len(files_sorted)} file(s), verified symlinks.")
+PY
+
 echo "  -> Firmware: $(du -sh "${STAGE_DIR}/lib/firmware" | cut -f1)"
 """
