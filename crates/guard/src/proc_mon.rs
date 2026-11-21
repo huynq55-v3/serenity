@@ -230,25 +230,42 @@ pub fn evaluate_exec_event(rec: &ProcEventRecord) -> Option<ProcSecurityAlert> {
 pub fn evaluate_uid_event(rec: &ProcEventRecord, ruid: u32, euid: u32) -> Option<ProcSecurityAlert> {
     if ruid != 0 && euid == 0 {
         let exe_clean = rec.exe.trim_end_matches(" (deleted)");
-        let allowed = exe_clean == "/init"
+        if exe_clean.is_empty() {
+            return None;
+        }
+        let is_core_suid = exe_clean == "/init"
             || exe_clean == "/usr/bin/sudo"
             || exe_clean == "/usr/bin/passwd"
             || exe_clean == "/usr/bin/serenity-guard";
-        if !allowed && !exe_clean.is_empty() {
-            return Some(ProcSecurityAlert {
-                severity: "CRITICAL",
-                rule_id: "PROC_UNAUTHORIZED_ROOT_ESCALATION",
-                pid: rec.pid,
-                ppid: rec.ppid,
-                exe: rec.exe.clone(),
-                cmdline: rec.cmdline.clone(),
-                summary: format!(
-                    "Unauthorized root privilege escalation (UID {} -> EUID 0) by PID {} (exe='{}', cmd='{}')",
-                    ruid, rec.pid, rec.exe, rec.cmdline
-                ),
-                recommend_freeze: true,
-            });
+        if is_core_suid {
+            return None;
         }
+
+        // When /usr/bin/sudo (/init) authenticates and calls setuid(0) + execve("/bin/..."),
+        // the kernel queued PROC_EVENT_UID(1000 -> 0) from /init before the execve completed,
+        // and by the time we inspect /proc/<pid>/status its real UID is already 0 (full sudo root)
+        // running a trusted system binary under /bin or /usr/bin.
+        let is_trusted_system_bin = exe_clean.starts_with("/bin/")
+            || exe_clean.starts_with("/usr/bin/")
+            || exe_clean.starts_with("/sbin/")
+            || exe_clean.starts_with("/usr/sbin/");
+        if rec.uid == 0 && rec.euid == 0 && is_trusted_system_bin {
+            return None;
+        }
+
+        return Some(ProcSecurityAlert {
+            severity: "CRITICAL",
+            rule_id: "PROC_UNAUTHORIZED_ROOT_ESCALATION",
+            pid: rec.pid,
+            ppid: rec.ppid,
+            exe: rec.exe.clone(),
+            cmdline: rec.cmdline.clone(),
+            summary: format!(
+                "Unauthorized root privilege escalation (UID {} -> EUID 0) by PID {} (exe='{}', cmd='{}')",
+                ruid, rec.pid, rec.exe, rec.cmdline
+            ),
+            recommend_freeze: true,
+        });
     }
     None
 }
@@ -432,7 +449,7 @@ impl ProcConnectorSocket {
                         buf[data_offset + 14],
                         buf[data_offset + 15],
                     ]);
-                    let (ppid, _, _, comm, exe, cmdline) = read_proc_meta(pid);
+                    let (ppid, cur_ruid, cur_euid, comm, exe, cmdline) = read_proc_meta(pid);
                     let (_, _, _, parent_comm, parent_exe, _) = if ppid > 0 {
                         read_proc_meta(ppid)
                     } else {
@@ -442,8 +459,8 @@ impl ProcConnectorSocket {
                         kind: "UID_CHANGE".to_string(),
                         pid,
                         ppid,
-                        uid: ruid,
-                        euid,
+                        uid: cur_ruid,
+                        euid: cur_euid,
                         comm,
                         exe,
                         cmdline,
