@@ -125,12 +125,25 @@ fn extract_tar<R: Read>(reader: R, meta: &PackageMeta) -> Result<Vec<String>, St
                     fs::create_dir_all(parent)
                         .map_err(|e| format!("mkdir {} failed: {}", parent.display(), e))?;
                 }
-                if dest.exists() || dest.symlink_metadata().is_ok() {
-                    let _ = fs::remove_file(&dest);
+                let file_name = dest
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("file");
+                let tmp_dest = dest
+                    .parent()
+                    .unwrap_or_else(|| Path::new("/"))
+                    .join(format!(".{}.spkg-tmp-{}", file_name, std::process::id()));
+                if tmp_dest.symlink_metadata().is_ok() {
+                    let _ = fs::remove_file(&tmp_dest);
                 }
-                entry
-                    .unpack(&dest)
-                    .map_err(|e| format!("unpack {} failed: {}", dest.display(), e))?;
+                if let Err(e) = entry.unpack(&tmp_dest) {
+                    let _ = fs::remove_file(&tmp_dest);
+                    return Err(format!("unpack {} failed: {}", dest.display(), e));
+                }
+                if let Err(e) = fs::rename(&tmp_dest, &dest) {
+                    let _ = fs::remove_file(&tmp_dest);
+                    return Err(format!("install {} failed: {}", dest.display(), e));
+                }
                 installed_files.push(dest.to_string_lossy().into_owned());
             }
         }

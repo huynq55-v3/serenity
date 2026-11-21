@@ -114,7 +114,7 @@ jobs:
             custom)
               if [ "${{ matrix.package }}" = "rust" ]; then
                 sudo apt-get update
-                sudo apt-get install -y --no-install-recommends zstd clang lld
+                sudo apt-get install -y --no-install-recommends zstd clang lld llvm musl-dev
               elif [ "${{ matrix.package }}" = "screenshot" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends \
