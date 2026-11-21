@@ -94,12 +94,23 @@ if [ -L "${MNT}/usr/share/X11/xkb" ]; then
     rm -f "${MNT}/usr/share/X11/xkb"
 fi
 
+# Clean legacy split-usr /lib/x86_64-linux-gnu if serenity-base (usr-merged into /usr/lib/x86_64-linux-gnu)
+# is present in STAGE_DIR so old libs never shadow the new ubuntu-24.04 runtime.
+if [ -f "${STAGE_DIR}/etc/serenity/base-info" ] && [ -d "${MNT}/lib/x86_64-linux-gnu" ] && [ ! -L "${MNT}/lib/x86_64-linux-gnu" ]; then
+    echo "[install] Removing legacy /lib/x86_64-linux-gnu on target partition..."
+    rm -rf "${MNT}/lib/x86_64-linux-gnu"
+fi
+
 echo "[install] Copying Serenity rootfs..."
 cp -a "${STAGE_DIR}/." "${MNT}/"
 
-# Automatically bundle Smithay compositor + Serenity Shell GUI if release binaries are built
-if [ -x "${ROOT_DIR}/target/release/serenity-compositor" ]; then
-    echo "[install] Detected release compositor build; bundling Smithay + GUI libraries..."
+# Only fall back to host bundle-compositor.sh if STAGE_DIR does NOT already contain
+# the CI-built serenity-base GNU runtime (otherwise host Ubuntu 26.04 binaries like
+# dbus-daemon 1.16 would overwrite ubuntu-24.04 serenity-base and break LIBDBUS_PRIVATE!).
+if [ -f "${STAGE_DIR}/etc/serenity/base-info" ]; then
+    echo "[install] Using CI serenity-base runtime ($(cat "${STAGE_DIR}/etc/serenity/base-info")); skipping host bundle-compositor.sh."
+elif [ -x "${ROOT_DIR}/target/release/serenity-compositor" ]; then
+    echo "[install] Detected release compositor build; bundling Smithay + GUI libraries from host..."
     "${ROOT_DIR}/scripts/bundle-compositor.sh" "${MNT}"
 fi
 
