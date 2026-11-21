@@ -75,6 +75,41 @@ fn mount_fs(source: &str, target: &str, fstype: &str, flags: libc::c_ulong, data
     }
 }
 
+fn apply_security_sysctls() {
+    const HARDENING_SYSCTLS: &[(&str, &str)] = &[
+        ("/proc/sys/kernel/kptr_restrict", "1\n"),
+        ("/proc/sys/kernel/dmesg_restrict", "1\n"),
+        ("/proc/sys/kernel/yama/ptrace_scope", "1\n"),
+        ("/proc/sys/kernel/unprivileged_bpf_disabled", "1\n"),
+        ("/proc/sys/fs/suid_dumpable", "0\n"),
+        ("/proc/sys/fs/protected_hardlinks", "1\n"),
+        ("/proc/sys/fs/protected_symlinks", "1\n"),
+        ("/proc/sys/fs/protected_fifos", "1\n"),
+        ("/proc/sys/fs/protected_regular", "2\n"),
+        ("/proc/sys/net/ipv4/tcp_syncookies", "1\n"),
+        ("/proc/sys/net/ipv4/conf/all/rp_filter", "1\n"),
+        ("/proc/sys/net/ipv4/conf/default/rp_filter", "1\n"),
+        ("/proc/sys/net/ipv4/conf/all/accept_redirects", "0\n"),
+        ("/proc/sys/net/ipv4/conf/default/accept_redirects", "0\n"),
+        ("/proc/sys/net/ipv4/conf/all/secure_redirects", "0\n"),
+        ("/proc/sys/net/ipv4/conf/default/secure_redirects", "0\n"),
+        ("/proc/sys/net/ipv4/conf/all/send_redirects", "0\n"),
+        ("/proc/sys/net/ipv4/conf/default/send_redirects", "0\n"),
+        ("/proc/sys/net/ipv4/conf/all/accept_source_route", "0\n"),
+        ("/proc/sys/net/ipv4/conf/default/accept_source_route", "0\n"),
+        ("/proc/sys/net/ipv4/icmp_echo_ignore_broadcasts", "1\n"),
+        ("/proc/sys/net/ipv4/icmp_ignore_bogus_error_responses", "1\n"),
+        ("/proc/sys/net/ipv6/conf/all/accept_redirects", "0\n"),
+        ("/proc/sys/net/ipv6/conf/default/accept_redirects", "0\n"),
+        ("/proc/sys/net/ipv6/conf/all/accept_source_route", "0\n"),
+        ("/proc/sys/net/ipv6/conf/default/accept_source_route", "0\n"),
+    ];
+
+    for (path, val) in HARDENING_SYSCTLS {
+        let _ = fs::write(path, val);
+    }
+}
+
 fn setup_filesystems() {
     let common = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
     mount_fs("proc", "/proc", "proc", common, None);
@@ -98,6 +133,8 @@ fn setup_filesystems() {
     // namespace sandbox enabled even on Ubuntu kernels that default apparmor_restrict_unprivileged_userns=1.
     let _ = fs::write("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "0\n");
     let _ = fs::write("/proc/sys/kernel/unprivileged_userns_clone", "1\n");
+
+    apply_security_sysctls();
 }
 
 fn setup_hostname() {
