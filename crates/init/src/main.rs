@@ -84,6 +84,15 @@ fn setup_filesystems() {
     mount_fs("tmpfs", "/run", "tmpfs", libc::MS_NOSUID | libc::MS_NODEV, Some("mode=0755"));
     mount_fs("tmpfs", "/dev/shm", "tmpfs", libc::MS_NOSUID | libc::MS_NODEV, Some("mode=1777"));
 
+    for (target, link) in [
+        ("/proc/self/fd", "/dev/fd"),
+        ("/proc/self/fd/0", "/dev/stdin"),
+        ("/proc/self/fd/1", "/dev/stdout"),
+        ("/proc/self/fd/2", "/dev/stderr"),
+    ] {
+        let _ = std::os::unix::fs::symlink(target, link);
+    }
+
     // Allow unprivileged Linux User Namespaces so browsers (Google Chrome) run with full
     // namespace sandbox enabled even on Ubuntu kernels that default apparmor_restrict_unprivileged_userns=1.
     let _ = fs::write("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "0\n");

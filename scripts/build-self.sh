@@ -404,9 +404,15 @@ install_remote_packages() {
             extra_pkgs+=("${pkg}")
         done
         if [ "${#extra_pkgs[@]}" -gt 0 ]; then
-            mapfile -t extra_pkgs < <(printf '%s\n' "${extra_pkgs[@]}" | sort -u)
-            echo "[self-build] Checking updates for additional installed package(s): ${extra_pkgs[*]}"
-            for pkg in "${extra_pkgs[@]}"; do
+            local sorted_extra=()
+            local pkg_line
+            while IFS= read -r pkg_line; do
+                [ -n "${pkg_line}" ] && sorted_extra+=("${pkg_line}")
+            done <<EOF
+$(printf '%s\n' "${extra_pkgs[@]}" | sort -u)
+EOF
+            echo "[self-build] Checking updates for additional installed package(s): ${sorted_extra[*]}"
+            for pkg in "${sorted_extra[@]}"; do
                 as_root /usr/bin/spkg install "${pkg}" || \
                     echo "[self-build] WARN: failed to upgrade ${pkg}"
             done
