@@ -103,6 +103,14 @@ write_dns_files_live() {
     rm -rf "${tmp_dir}"
 }
 
+write_wireplumber_config_live() {
+    local wp_src="${ROOT_DIR}/rootfs/overlay/etc/wireplumber/bluetooth.lua.d/51-disable-logind.lua"
+    local wp_dst="/etc/wireplumber/bluetooth.lua.d/51-disable-logind.lua"
+    if [ -f "${wp_src}" ]; then
+        atomic_install 0644 "${wp_src}" "${wp_dst}"
+    fi
+}
+
 fix_glibc_linker_scripts() {
     local libdir="/usr/lib/x86_64-linux-gnu"
     local tmp_dir
@@ -362,6 +370,7 @@ install_staged_to_root() {
     as_root cp -rP --preserve=mode,timestamps --no-preserve=ownership "${STAGE_DIR}/usr/share/." /usr/share/
 
     write_dns_files_live
+    write_wireplumber_config_live
 }
 
 install_remote_packages() {
@@ -473,8 +482,9 @@ main() {
         echo "[self-build] --skip-packages set; skipped remote package updates."
     fi
 
-    # Re-apply DNS in case an installed package touched /etc/NetworkManager or /etc/resolv.conf
+    # Re-apply DNS & WirePlumber config in case an installed package touched /etc
     write_dns_files_live
+    write_wireplumber_config_live
     as_root sync
 
     echo ""

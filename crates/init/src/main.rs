@@ -503,29 +503,24 @@ fn handle_multicall_applet() -> bool {
                         .args(["--session", &format!("--address={}", bus_addr), "--fork"])
                         .status();
                 }
-                // Start PipeWire + PipeWire-Pulse + WirePlumber user audio stack if installed
+                // Start PipeWire -> WirePlumber -> PipeWire-Pulse user audio stack if installed.
+                // Ordering matters: WirePlumber must register real ALSA sinks before pipewire-pulse
+                // exposes the PulseAudio socket to apps like Chrome, preventing Dummy Output lock-in.
                 if Path::new("/usr/bin/pipewire").exists() {
-                    for (bin, log_path) in [
-                        ("/usr/bin/pipewire", "/tmp/pipewire.log"),
-                        ("/usr/bin/pipewire-pulse", "/tmp/pipewire-pulse.log"),
-                        ("/usr/bin/wireplumber", "/tmp/wireplumber.log"),
-                    ] {
-                        if Path::new(bin).exists() {
-                            let log_out = fs::File::create(log_path)
-                                .map(std::process::Stdio::from)
-                                .unwrap_or_else(|_| std::process::Stdio::null());
-                            let log_err = fs::File::create(log_path)
-                                .map(std::process::Stdio::from)
-                                .unwrap_or_else(|_| std::process::Stdio::null());
-                            let _ = Command::new(bin)
-                                .stdin(std::process::Stdio::null())
-                                .stdout(log_out)
-                                .stderr(log_err)
-                                .spawn();
-                            if bin == "/usr/bin/pipewire" {
-                                thread::sleep(Duration::from_millis(150));
-                            }
+                    unmute_alsa_on_first_boot();
+                    spawn_logged_daemon("/usr/bin/pipewire", "/tmp/pipewire.log");
+                    for _ in 0..40 {
+                        if Path::new("/run/user/1000/pipewire-0").exists() {
+                            break;
                         }
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    if Path::new("/usr/bin/wireplumber").exists() {
+                        spawn_logged_daemon("/usr/bin/wireplumber", "/tmp/wireplumber.log");
+                        thread::sleep(Duration::from_millis(250));
+                    }
+                    if Path::new("/usr/bin/pipewire-pulse").exists() {
+                        spawn_logged_daemon("/usr/bin/pipewire-pulse", "/tmp/pipewire-pulse.log");
                     }
                 }
                 Command::new("/usr/bin/cosmic-session")
@@ -551,6 +546,49 @@ fn handle_multicall_applet() -> bool {
             std::process::exit(1);
         }
         _ => false,
+    }
+}
+
+fn spawn_logged_daemon(bin: &str, log_path: &str) {
+    let (stdout, stderr) = match fs::File::create(log_path) {
+        Ok(out) => {
+            let err = out
+                .try_clone()
+                .map(std::process::Stdio::from)
+                .unwrap_or_else(|_| std::process::Stdio::null());
+            (std::process::Stdio::from(out), err)
+        }
+        Err(_) => (std::process::Stdio::null(), std::process::Stdio::null()),
+    };
+    let _ = Command::new(bin)
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn();
+}
+
+fn unmute_alsa_on_first_boot() {
+    if Path::new("/home/serenity/.local/state/wireplumber/default-routes").exists()
+        || !Path::new("/usr/bin/amixer").exists()
+    {
+        return;
+    }
+    let Ok(entries) = fs::read_dir("/sys/class/sound") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else { continue };
+        let Some(idx_str) = name_str.strip_prefix("card") else { continue };
+        if idx_str.parse::<u32>().is_err() {
+            continue;
+        }
+        let _ = Command::new("/usr/bin/amixer")
+            .args(["-c", idx_str, "sset", "Master", "80%", "unmute"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
     }
 }
 

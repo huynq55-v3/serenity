@@ -1,6 +1,6 @@
 [package]
 name = "pipewire"
-version = "1.0.1"
+version = "1.0.2"
 arch = "x86_64-gnu"
 description = "PipeWire + WirePlumber + PipeWire-Pulse audio server with ALSA UCM2 & ACP configs"
 deps = ["clibrary"]
@@ -86,6 +86,16 @@ for data_dir in \
     fi
 done
 
+# Disable WirePlumber's systemd-logind seat monitor (Serenity has no systemd-logind)
+mkdir -p "${STAGE_DIR}/etc/wireplumber/bluetooth.lua.d"
+cat > "${STAGE_DIR}/etc/wireplumber/bluetooth.lua.d/51-disable-logind.lua" <<'EOF'
+-- Serenity Linux does not run systemd-logind (/run/systemd/seats is absent).
+-- Disable WirePlumber's logind seat monitor so wireplumber does not abort
+-- with ENOENT before registering ALSA / Intel SOF audio devices.
+bluez_monitor.properties["with-logind"] = false
+bluez_midi_monitor.properties["with-logind"] = false
+EOF
+
 if ! compgen -G "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/wireplumber-*/libwireplumber-module-*.so" >/dev/null; then
     echo "ERROR: missing WirePlumber modules under ${STAGE_DIR}/usr/lib/x86_64-linux-gnu/wireplumber-*" >&2
     exit 1
@@ -94,23 +104,44 @@ if [ ! -d "${STAGE_DIR}/usr/share/alsa-card-profile/mixer" ]; then
     echo "ERROR: missing ALSA Card Profile configs at ${STAGE_DIR}/usr/share/alsa-card-profile/mixer" >&2
     exit 1
 fi
+if [ ! -f "${STAGE_DIR}/etc/wireplumber/bluetooth.lua.d/51-disable-logind.lua" ]; then
+    echo "ERROR: missing WirePlumber logind-disable drop-in config" >&2
+    exit 1
+fi
 """
 
 [install.scripts]
 "usr/bin/start-audio" = """#!/bin/sh
-# Start PipeWire, PipeWire-Pulse, and WirePlumber for the current user session
+# Start PipeWire, WirePlumber, and PipeWire-Pulse for the current user session
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
 
+# Unmute ALSA Master on first boot before WirePlumber persists route volumes
+if [ ! -e "${HOME}/.local/state/wireplumber/default-routes" ] && [ -x /usr/bin/amixer ]; then
+    for card_dir in /sys/class/sound/card*; do
+        [ -d "${card_dir}" ] || continue
+        card_idx="${card_dir##*/card}"
+        case "${card_idx}" in
+            ''|*[!0-9]*) continue ;;
+        esac
+        /usr/bin/amixer -c "${card_idx}" sset Master 80% unmute >/dev/null 2>&1 || true
+    done
+fi
+
 if [ ! -e "${XDG_RUNTIME_DIR}/pipewire-0" ] && [ -x /usr/bin/pipewire ]; then
     /usr/bin/pipewire >/tmp/pipewire.log 2>&1 &
+    waited=0
+    while [ ! -e "${XDG_RUNTIME_DIR}/pipewire-0" ] && [ "${waited}" -lt 20 ]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+fi
+if [ -x /usr/bin/wireplumber ]; then
+    /usr/bin/wireplumber >/tmp/wireplumber.log 2>&1 &
     sleep 0.3
 fi
 if [ ! -e "${XDG_RUNTIME_DIR}/pulse/native" ] && [ -x /usr/bin/pipewire-pulse ]; then
     /usr/bin/pipewire-pulse >/tmp/pipewire-pulse.log 2>&1 &
-fi
-if [ -x /usr/bin/wireplumber ]; then
-    /usr/bin/wireplumber >/tmp/wireplumber.log 2>&1 &
 fi
 echo "Audio daemons started (logs in /tmp/pipewire*.log, /tmp/wireplumber.log)."
 """
