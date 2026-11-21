@@ -328,20 +328,46 @@ impl GuardShared {
                 Ok("Requested SHA-256 FIM re-baseline".to_string())
             }
             "simulate_alert" => {
-                let self_pid = unsafe { libc::getpid() };
+                let sleep_bin = if Path::new("/bin/sleep").exists() {
+                    "/bin/sleep"
+                } else {
+                    "/bin/coreutils"
+                };
+                let mut cmd = Command::new(sleep_bin);
+                if sleep_bin.ends_with("coreutils") {
+                    cmd.arg("sleep");
+                }
+                let drill_pid = cmd
+                    .arg("300")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .map(|c| c.id() as i32)
+                    .ok();
+
                 let mut st = self.state.lock().unwrap();
+                let pid_label = drill_pid
+                    .map(|p| format!("dummy target PID {}", p))
+                    .unwrap_or_else(|| "no target PID".to_string());
                 st.push_alert(
                     now,
                     "CRITICAL",
                     "DRILL_SIMULATED_INTRUSION",
-                    "SIMULATED DRILL: Reverse shell beacon detected to 198.51.100.77:4444 (use 'Block 198.51.100.77' or 'Inspect' to test active response)".to_string(),
-                    Some(self_pid),
-                    "/usr/bin/serenity-guard".to_string(),
+                    format!(
+                        "SIMULATED DRILL: Spawned harmless dummy process ({}) simulating beacon to 198.51.100.77:4444 — click Inspect, Freeze, Resume, Kill, or Block IP!",
+                        pid_label
+                    ),
+                    drill_pid,
+                    sleep_bin.to_string(),
                     "198.51.100.77".to_string(),
                     "127.0.0.1:55443".to_string(),
                     "198.51.100.77:4444".to_string(),
                 );
-                Ok("Triggered simulated intrusion drill alert".to_string())
+                Ok(format!(
+                    "Spawned harmless drill target ({}) for live Freeze/Kill testing",
+                    pid_label
+                ))
             }
             _ => Err(format!("Unknown action: '{}'", action)),
         };
@@ -429,6 +455,9 @@ fn run_daemon() -> Result<(), String> {
     let mut tick: u64 = 0;
     loop {
         thread::sleep(Duration::from_millis(250));
+        unsafe {
+            while libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) > 0 {}
+        }
         tick = tick.wrapping_add(1);
         let now = epoch_now();
         let mut changed = false;

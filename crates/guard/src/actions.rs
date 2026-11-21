@@ -191,6 +191,9 @@ pub fn kill_process(pid: i32) -> Result<String, String> {
             std::io::Error::last_os_error()
         ));
     }
+    unsafe {
+        let _ = libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG);
+    }
     Ok(format!(
         "Terminated PID {} ({} [{}]) with SIGKILL",
         pid, comm, exe
