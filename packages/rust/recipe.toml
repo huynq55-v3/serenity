@@ -98,11 +98,16 @@ done
 if [ -e /usr/lib/x86_64-linux-gnu/libmvec.so.1 ]; then
     cp -L /usr/lib/x86_64-linux-gnu/libmvec.so.1 "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/"
 fi
-for ld_script in libc.so libm.so; do
-    if [ -f "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/${ld_script}" ]; then
-        sed -i 's|/lib/x86_64-linux-gnu/|/usr/lib/x86_64-linux-gnu/|g' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/${ld_script}"
-    fi
-done
+cat > "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libc.so" <<'EOF'
+/* GNU ld script */
+OUTPUT_FORMAT(elf64-x86-64)
+GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a AS_NEEDED ( /lib64/ld-linux-x86-64.so.2 ) )
+EOF
+cat > "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libm.so" <<'EOF'
+/* GNU ld script */
+OUTPUT_FORMAT(elf64-x86-64)
+GROUP ( /usr/lib/x86_64-linux-gnu/libm.so.6 AS_NEEDED ( /usr/lib/x86_64-linux-gnu/libmvec.so.1 ) )
+EOF
 
 # Copy GCC CRT objects & libgcc static/shared archives (clang uses them automatically to link)
 GCC_DIR="$(dirname "$(gcc -print-libgcc-file-name)")"
@@ -122,8 +127,12 @@ test -d "${STAGE_DIR}/usr/lib/rustlib/x86_64-unknown-linux-musl/lib"
 test -x "${STAGE_DIR}/usr/bin/llvm-ar"
 test -f "${STAGE_DIR}/usr/include/x86_64-linux-musl/sys/auxv.h"
 test -f "${STAGE_DIR}${CLANG_RES}/include/stddef.h"
-! grep -q '/lib/x86_64-linux-gnu/' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libc.so"
-! grep -q '/lib/x86_64-linux-gnu/' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libm.so"
+grep -q ' /usr/lib/x86_64-linux-gnu/libc.so.6 ' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libc.so"
+grep -q ' /usr/lib/x86_64-linux-gnu/libm.so.6 ' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libm.so"
+! grep -q ' /lib/x86_64-linux-gnu/' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libc.so"
+! grep -q ' /lib/x86_64-linux-gnu/' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libm.so"
+! grep -q '/usr/usr/' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libc.so"
+! grep -q '/usr/usr/' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libm.so"
 test -f "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libmvec.so.1"
 """
 

@@ -108,24 +108,31 @@ fix_glibc_linker_scripts() {
     local tmp_dir
     tmp_dir="$(mktemp -d)"
 
-    if [ -f "${libdir}/libc.so" ] && grep -q '/lib/x86_64-linux-gnu/' "${libdir}/libc.so"; then
-        echo "[self-build] Fixing glibc linker script paths in ${libdir}/libc.so..."
-        sed 's|/lib/x86_64-linux-gnu/|/usr/lib/x86_64-linux-gnu/|g' "${libdir}/libc.so" > "${tmp_dir}/libc.so"
+    local expected_libc_group="GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a AS_NEEDED ( /lib64/ld-linux-x86-64.so.2 ) )"
+    if [ -f "${libdir}/libc.so" ] && ! grep -Fqx "${expected_libc_group}" "${libdir}/libc.so"; then
+        echo "[self-build] Writing canonical GNU ld script at ${libdir}/libc.so..."
+        cat > "${tmp_dir}/libc.so" <<EOF
+/* GNU ld script */
+OUTPUT_FORMAT(elf64-x86-64)
+${expected_libc_group}
+EOF
         atomic_install 0644 "${tmp_dir}/libc.so" "${libdir}/libc.so"
     fi
 
     if [ -f "${libdir}/libm.so" ]; then
-        if [ ! -e "${libdir}/libmvec.so.1" ] && grep -q 'libmvec\.so\.1' "${libdir}/libm.so"; then
-            echo "[self-build] Fixing glibc linker script in ${libdir}/libm.so (dropping missing libmvec.so.1)..."
-            cat > "${tmp_dir}/libm.so" <<'EOF'
+        local expected_libm_group
+        if [ -e "${libdir}/libmvec.so.1" ]; then
+            expected_libm_group="GROUP ( /usr/lib/x86_64-linux-gnu/libm.so.6 AS_NEEDED ( /usr/lib/x86_64-linux-gnu/libmvec.so.1 ) )"
+        else
+            expected_libm_group="GROUP ( /usr/lib/x86_64-linux-gnu/libm.so.6 )"
+        fi
+        if ! grep -Fqx "${expected_libm_group}" "${libdir}/libm.so"; then
+            echo "[self-build] Writing canonical GNU ld script at ${libdir}/libm.so..."
+            cat > "${tmp_dir}/libm.so" <<EOF
 /* GNU ld script */
 OUTPUT_FORMAT(elf64-x86-64)
-GROUP ( /usr/lib/x86_64-linux-gnu/libm.so.6 )
+${expected_libm_group}
 EOF
-            atomic_install 0644 "${tmp_dir}/libm.so" "${libdir}/libm.so"
-        elif grep -q '/lib/x86_64-linux-gnu/' "${libdir}/libm.so"; then
-            echo "[self-build] Fixing glibc linker script paths in ${libdir}/libm.so..."
-            sed 's|/lib/x86_64-linux-gnu/|/usr/lib/x86_64-linux-gnu/|g' "${libdir}/libm.so" > "${tmp_dir}/libm.so"
             atomic_install 0644 "${tmp_dir}/libm.so" "${libdir}/libm.so"
         fi
     fi
