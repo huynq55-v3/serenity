@@ -6,6 +6,7 @@ BUILD_DIR="${ROOT_DIR}/build"
 STAGE_DIR="${BUILD_DIR}/rootfs-stage"
 INIT_BIN="${ROOT_DIR}/target/x86_64-unknown-linux-musl/release/init"
 SPKG_BIN="${ROOT_DIR}/target/x86_64-unknown-linux-musl/release/spkg"
+GUARD_BIN="${ROOT_DIR}/target/x86_64-unknown-linux-musl/release/serenity-guard"
 NU_BIN="${BUILD_DIR}/userland/bin/nu"
 COREUTILS_BIN="${BUILD_DIR}/userland/bin/coreutils"
 OUT_INITRAMFS="${BUILD_DIR}/initramfs.cpio.gz"
@@ -43,9 +44,12 @@ ln -sf /init "${STAGE_DIR}/usr/bin/serenity-fw"
 ln -sf /init "${STAGE_DIR}/usr/bin/cosmic-osd"
 ln -sf /init "${STAGE_DIR}/usr/bin/start-desktop"
 
-# Install Nushell, spkg & uutils/coreutils
+# Install Nushell, spkg, serenity-guard & uutils/coreutils
 install -m 0755 "${NU_BIN}" "${STAGE_DIR}/bin/nu"
 install -m 0755 "${SPKG_BIN}" "${STAGE_DIR}/usr/bin/spkg"
+if [ -x "${GUARD_BIN}" ]; then
+    install -m 0755 "${GUARD_BIN}" "${STAGE_DIR}/usr/bin/serenity-guard"
+fi
 install -m 0755 "${COREUTILS_BIN}" "${STAGE_DIR}/bin/coreutils"
 
 # Generate symlinks for all uutils/coreutils applets

@@ -471,6 +471,7 @@ fn handle_multicall_applet() -> bool {
             }
 
             setup_desktop_permissions();
+            ensure_serenity_guard_started();
 
             println!("[serenity] Dropping privileges to user 'serenity' (UID 1000)...");
             let groups: [libc::gid_t; 5] = [1000, 29, 44, 104, 107]; // serenity, audio, video, input, render
@@ -582,6 +583,23 @@ fn spawn_logged_daemon(bin: &str, log_path: &str) {
         .stdout(stdout)
         .stderr(stderr)
         .spawn();
+}
+
+fn ensure_serenity_guard_started() {
+    if !Path::new("/usr/bin/serenity-guard").exists() {
+        return;
+    }
+    if let Ok(pid_str) = fs::read_to_string("/run/serenity-guard/daemon.pid") {
+        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+            if pid > 1 && Path::new(&format!("/proc/{}", pid)).exists() {
+                return;
+            }
+        }
+    }
+    let _ = Command::new("/usr/bin/serenity-guard")
+        .arg("start")
+        .stdin(std::process::Stdio::null())
+        .status();
 }
 
 fn unmute_alsa_on_first_boot() {
@@ -811,6 +829,7 @@ fn main() {
         Ok(()) => println!("[init] Firewall enabled (nftables inet serenity_fw: input=DROP, forward=DROP, output=ACCEPT)"),
         Err(e) => eprintln!("[init] warn: failed to initialize nftables firewall: {}", e),
     }
+    ensure_serenity_guard_started();
 
     print_banner(net_status.as_deref(), kmods_loaded);
 

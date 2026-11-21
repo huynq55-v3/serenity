@@ -2541,6 +2541,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serenity-guard"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "serenity-init"
 version = "0.1.0"
 dependencies = [

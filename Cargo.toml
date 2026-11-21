@@ -6,6 +6,7 @@ members = [
     "crates/compositor",
     "crates/shell-ui",
     "crates/sysd",
+    "crates/guard",
 ]
 
 [profile.release]

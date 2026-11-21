@@ -55,6 +55,9 @@ check-deps:
 init:
 	cargo build --release --target $(TARGET_MUSL) -p serenity-init
 
+guard:
+	cargo build --release --target $(TARGET_MUSL) -p serenity-guard
+
 spkg:
 	CC_x86_64_unknown_linux_musl=clang cargo build --release --target $(TARGET_MUSL) -p spkg
 
@@ -91,7 +94,7 @@ kernel:
 	@chmod +x kernel/build.sh
 	@./kernel/build.sh
 
-disk: init spkg nushell coreutils
+disk: init spkg guard nushell coreutils
 	@chmod +x scripts/build-rootfs.sh
 	@./scripts/build-rootfs.sh disk
 

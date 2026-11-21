@@ -282,10 +282,11 @@ EOF
 stage_rootfs() {
     local init_bin="${ROOT_DIR}/target/${MUSL_TARGET}/release/init"
     local spkg_bin="${ROOT_DIR}/target/${MUSL_TARGET}/release/spkg"
+    local guard_bin="${ROOT_DIR}/target/${MUSL_TARGET}/release/serenity-guard"
     local nu_bin="${USERLAND_BIN}/nu"
     local coreutils_bin="${USERLAND_BIN}/coreutils"
 
-    for bin in "${init_bin}" "${spkg_bin}" "${nu_bin}" "${coreutils_bin}"; do
+    for bin in "${init_bin}" "${spkg_bin}" "${guard_bin}" "${nu_bin}" "${coreutils_bin}"; do
         if [ ! -x "${bin}" ]; then
             echo "[self-build] ERROR: Missing built binary: ${bin}" >&2
             exit 1
@@ -313,6 +314,7 @@ stage_rootfs() {
 
     install -m 0755 "${nu_bin}" "${STAGE_DIR}/bin/nu"
     install -m 0755 "${spkg_bin}" "${STAGE_DIR}/usr/bin/spkg"
+    install -m 0755 "${guard_bin}" "${STAGE_DIR}/usr/bin/serenity-guard"
     install -m 0755 "${coreutils_bin}" "${STAGE_DIR}/bin/coreutils"
 
     local applet_count=0
@@ -330,12 +332,14 @@ stage_rootfs() {
 install_staged_to_root() {
     local init_bin="${STAGE_DIR}/init"
     local spkg_bin="${STAGE_DIR}/usr/bin/spkg"
+    local guard_bin="${STAGE_DIR}/usr/bin/serenity-guard"
     local nu_bin="${STAGE_DIR}/bin/nu"
     local coreutils_bin="${STAGE_DIR}/bin/coreutils"
 
     echo "[self-build] Installing static musl binaries atomically into /..."
     atomic_install 04755 "${init_bin}" /init
     atomic_install 0755 "${spkg_bin}" /usr/bin/spkg
+    atomic_install 0755 "${guard_bin}" /usr/bin/serenity-guard
     atomic_install 0755 "${nu_bin}" /bin/nu
     atomic_install 0755 "${coreutils_bin}" /bin/coreutils
 
@@ -473,6 +477,9 @@ main() {
     echo "[self-build] Building spkg (${MUSL_TARGET})..."
     cargo build --release --target "${MUSL_TARGET}" -p spkg
 
+    echo "[self-build] Building serenity-guard (${MUSL_TARGET})..."
+    cargo build --release --target "${MUSL_TARGET}" -p serenity-guard
+
     echo "[self-build] Fetching static musl userland tools (nu, coreutils)..."
     bash "${ROOT_DIR}/scripts/fetch-nushell.sh"
     bash "${ROOT_DIR}/scripts/fetch-coreutils.sh"
@@ -495,6 +502,10 @@ main() {
     # Re-apply DNS & WirePlumber config in case an installed package touched /etc
     write_dns_files_live
     write_wireplumber_config_live
+    if [ -x /usr/bin/serenity-guard ]; then
+        as_root /usr/bin/serenity-guard stop >/dev/null 2>&1 || true
+        as_root /usr/bin/serenity-guard start || true
+    fi
     as_root sync
 
     echo ""
