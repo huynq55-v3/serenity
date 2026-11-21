@@ -39,6 +39,7 @@ ln -sf /init "${STAGE_DIR}/usr/bin/reboot"
 ln -sf /init "${STAGE_DIR}/usr/bin/suspend"
 ln -sf /init "${STAGE_DIR}/usr/bin/sudo"
 ln -sf /init "${STAGE_DIR}/usr/bin/passwd"
+ln -sf /init "${STAGE_DIR}/usr/bin/serenity-fw"
 ln -sf /init "${STAGE_DIR}/usr/bin/cosmic-osd"
 ln -sf /init "${STAGE_DIR}/usr/bin/start-desktop"
 

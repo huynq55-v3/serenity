@@ -307,6 +307,7 @@ stage_rootfs() {
     ln -sf /init "${STAGE_DIR}/usr/bin/suspend"
     ln -sf /init "${STAGE_DIR}/usr/bin/sudo"
     ln -sf /init "${STAGE_DIR}/usr/bin/passwd"
+    ln -sf /init "${STAGE_DIR}/usr/bin/serenity-fw"
     ln -sf /init "${STAGE_DIR}/usr/bin/cosmic-osd"
     ln -sf /init "${STAGE_DIR}/usr/bin/start-desktop"
 
@@ -347,6 +348,7 @@ install_staged_to_root() {
     as_root ln -sfn /init /usr/bin/suspend
     as_root ln -sfn /init /usr/bin/sudo
     as_root ln -sfn /init /usr/bin/passwd
+    as_root ln -sfn /init /usr/bin/serenity-fw
     as_root ln -sfn /init /usr/bin/cosmic-osd
     as_root ln -sfn /init /usr/bin/start-desktop
 

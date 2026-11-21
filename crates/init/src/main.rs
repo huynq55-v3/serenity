@@ -1,4 +1,5 @@
 mod auth;
+mod firewall;
 mod kmod;
 mod net;
 
@@ -307,6 +308,7 @@ fn handle_multicall_applet() -> bool {
         }
         "sudo" => auth::run_sudo_applet(),
         "passwd" => auth::run_passwd_applet(),
+        "serenity-fw" => firewall::run_fw_applet(),
         "suspend" => {
             println!("[serenity] Syncing filesystems and entering sleep (suspend-to-RAM)...");
             unsafe { libc::sync(); }
@@ -805,6 +807,10 @@ fn main() {
     }
     setup_desktop_permissions();
     let net_status = net::setup_network();
+    match firewall::apply_default_firewall() {
+        Ok(()) => println!("[init] Firewall enabled (nftables inet serenity_fw: input=DROP, forward=DROP, output=ACCEPT)"),
+        Err(e) => eprintln!("[init] warn: failed to initialize nftables firewall: {}", e),
+    }
 
     print_banner(net_status.as_deref(), kmods_loaded);
 
