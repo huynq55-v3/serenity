@@ -124,7 +124,10 @@ fn handle_client(mut stream: TcpStream, shared: GuardShared) -> Result<(), std::
                 .find_map(|kv| kv.strip_prefix("pid="))
                 .and_then(|v| v.parse::<i32>().ok())
                 .unwrap_or(0);
-            let report = crate::actions::inspect_process(pid);
+            let report = {
+                let mut st = shared.state.lock().unwrap();
+                st.get_forensic_report(pid)
+            };
             let json = serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string());
             write_response(&mut stream, "200 OK", "application/json", json.as_bytes())
         }

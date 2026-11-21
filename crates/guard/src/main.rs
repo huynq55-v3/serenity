@@ -10,7 +10,7 @@ use net_mon::{NetConnection, NetMonitor};
 use proc_mon::{ProcConnectorSocket, ProcEventRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -67,6 +67,7 @@ pub struct GuardState {
     pub connections: Vec<NetConnection>,
     pub fim_entries: Vec<FimEntry>,
     pub recent_procs: VecDeque<ProcEventRecord>,
+    pub forensic_cache: HashMap<i32, actions::ForensicReport>,
     pub request_fim_rebaseline: bool,
 }
 
@@ -82,8 +83,82 @@ impl GuardState {
             connections: Vec::new(),
             fim_entries: Vec::new(),
             recent_procs: VecDeque::new(),
+            forensic_cache: HashMap::new(),
             request_fim_rebaseline: false,
         }
+    }
+
+    fn collect_pid_context(&self, pid: i32) -> (Vec<String>, Vec<String>) {
+        let sockets = self
+            .connections
+            .iter()
+            .filter(|c| c.pid == Some(pid))
+            .map(|c| {
+                format!(
+                    "{} {}:{} -> {}:{} ({})",
+                    c.proto, c.local_ip, c.local_port, c.remote_ip, c.remote_port, c.state
+                )
+            })
+            .collect();
+
+        let history = self
+            .alerts
+            .iter()
+            .filter(|a| a.pid == Some(pid))
+            .map(|a| format!("[#{}][{}][{}] {}", a.id, a.severity, a.rule_id, a.summary))
+            .collect();
+
+        (sockets, history)
+    }
+
+    pub fn capture_forensics(&mut self, pid: i32) {
+        if pid <= 0 {
+            return;
+        }
+        let mut rep = actions::inspect_process(pid);
+        let (sockets, history) = self.collect_pid_context(pid);
+        if rep.exists {
+            rep.network_sockets = sockets;
+            rep.alert_history = history;
+            if self.forensic_cache.len() >= 256 && !self.forensic_cache.contains_key(&pid) {
+                if let Some(&oldest_key) = self
+                    .forensic_cache
+                    .iter()
+                    .min_by_key(|(_, v)| v.captured_at_epoch)
+                    .map(|(k, _)| k)
+                {
+                    self.forensic_cache.remove(&oldest_key);
+                }
+            }
+            self.forensic_cache.insert(pid, rep);
+        } else if let Some(cached) = self.forensic_cache.get_mut(&pid) {
+            cached.alert_history = history;
+        }
+    }
+
+    pub fn get_forensic_report(&mut self, pid: i32) -> actions::ForensicReport {
+        let mut live = actions::inspect_process(pid);
+        let (sockets, history) = self.collect_pid_context(pid);
+
+        if live.exists {
+            live.network_sockets = sockets;
+            live.alert_history = history;
+            self.forensic_cache.insert(pid, live.clone());
+            return live;
+        }
+
+        if let Some(mut cached) = self.forensic_cache.get(&pid).cloned() {
+            cached.exists = false;
+            cached.live_status = "EXITED (Forensic snapshot preserved at alert time)".to_string();
+            if !cached.state.starts_with("EXITED") {
+                cached.state = format!("EXITED (was: {})", cached.state);
+            }
+            cached.alert_history = history;
+            return cached;
+        }
+
+        live.alert_history = history;
+        live
     }
 
     pub fn push_alert(
@@ -114,6 +189,9 @@ impl GuardState {
         self.alerts.push_front(alert.clone());
         while self.alerts.len() > MAX_ALERTS {
             self.alerts.pop_back();
+        }
+        if let Some(p) = pid {
+            self.capture_forensics(p);
         }
         append_alert_jsonl(&alert);
         alert
@@ -239,6 +317,10 @@ impl GuardShared {
                 Ok(msg)
             }
             "freeze_pid" => {
+                {
+                    let mut st = self.state.lock().unwrap();
+                    st.capture_forensics(pid);
+                }
                 let msg = actions::freeze_process(pid)?;
                 let mut st = self.state.lock().unwrap();
                 st.push_alert(
@@ -271,6 +353,10 @@ impl GuardShared {
                 Ok(msg)
             }
             "kill_pid" => {
+                {
+                    let mut st = self.state.lock().unwrap();
+                    st.capture_forensics(pid);
+                }
                 let msg = actions::kill_process(pid)?;
                 let mut st = self.state.lock().unwrap();
                 st.push_alert(
@@ -921,6 +1007,15 @@ fn main() {
                 .and_then(|s| s.parse::<i32>().ok())
                 .ok_or_else(|| "Usage: serenity-guard inspect <pid>".to_string());
             pid.map(|p| {
+                if let Ok(body) = mcp::http_get_local(&format!("/api/inspect?pid={}", p)) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&val).unwrap_or(body)
+                        );
+                        return;
+                    }
+                }
                 let rep = actions::inspect_process(p);
                 println!(
                     "{}",
@@ -1041,5 +1136,31 @@ fn main() {
     if let Err(e) = result {
         eprintln!("[serenity-guard] error: {}", e);
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_forensic_cache_preserves_exited_process_snapshot() {
+        let now = epoch_now();
+        let mut st = GuardState::new(now, false);
+        let self_pid = unsafe { libc::getpid() };
+        st.capture_forensics(self_pid);
+        let snap = st.forensic_cache.remove(&self_pid).expect("captured self");
+
+        // Simulate the PID exiting by storing its snapshot under a non-existent PID
+        let exited_pid = 999_999;
+        let mut sim_snap = snap;
+        sim_snap.pid = exited_pid;
+        st.forensic_cache.insert(exited_pid, sim_snap);
+
+        let rep = st.get_forensic_report(exited_pid);
+        assert!(!rep.exists);
+        assert!(rep.live_status.contains("EXITED"));
+        assert!(!rep.exe_sha256.is_empty());
+        assert!(!rep.exe.is_empty());
     }
 }

@@ -259,11 +259,25 @@ fn dispatch_mcp_tool(name: &str, args: &Value) -> (bool, String) {
         },
         "guard_inspect_process" => {
             let pid = args.get("pid").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-            let report = crate::actions::inspect_process(pid);
-            (
-                false,
-                serde_json::to_string_pretty(&report).unwrap_or_default(),
-            )
+            match http_get_local(&format!("/api/inspect?pid={}", pid)) {
+                Ok(body) => {
+                    if let Ok(val) = serde_json::from_str::<Value>(&body) {
+                        (
+                            false,
+                            serde_json::to_string_pretty(&val).unwrap_or(body),
+                        )
+                    } else {
+                        (false, body)
+                    }
+                }
+                Err(_) => {
+                    let report = crate::actions::inspect_process(pid);
+                    (
+                        false,
+                        serde_json::to_string_pretty(&report).unwrap_or_default(),
+                    )
+                }
+            }
         }
         "guard_block_ip" => {
             let ip = args.get("ip").and_then(|v| v.as_str()).unwrap_or("");

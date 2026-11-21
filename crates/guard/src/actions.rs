@@ -11,6 +11,8 @@ pub const BLOCKED_IPS_PATH: &str = "/etc/serenity/blocked-ips.conf";
 pub struct ForensicReport {
     pub pid: i32,
     pub exists: bool,
+    pub captured_at_epoch: u64,
+    pub live_status: String,
     pub state: String,
     pub comm: String,
     pub exe: String,
@@ -25,6 +27,9 @@ pub struct ForensicReport {
     pub parent_chain: Vec<String>,
     pub threads: u32,
     pub rss_kb: u64,
+    pub environ_vars: Vec<String>,
+    pub network_sockets: Vec<String>,
+    pub alert_history: Vec<String>,
     pub open_fds: Vec<String>,
     pub rwx_memory_regions: Vec<String>,
 }
@@ -201,11 +206,14 @@ pub fn kill_process(pid: i32) -> Result<String, String> {
 }
 
 pub fn inspect_process(pid: i32) -> ForensicReport {
+    let now = crate::epoch_now();
     let proc_dir = format!("/proc/{}", pid);
-    if !Path::new(&proc_dir).exists() {
+    if pid <= 0 || !Path::new(&proc_dir).exists() {
         return ForensicReport {
             pid,
             exists: false,
+            captured_at_epoch: now,
+            live_status: "EXITED (Not running, no snapshot cached for this PID)".to_string(),
             state: "EXITED".to_string(),
             comm: String::new(),
             exe: String::new(),
@@ -220,6 +228,9 @@ pub fn inspect_process(pid: i32) -> ForensicReport {
             parent_chain: Vec::new(),
             threads: 0,
             rss_kb: 0,
+            environ_vars: Vec::new(),
+            network_sockets: Vec::new(),
+            alert_history: Vec::new(),
             open_fds: Vec::new(),
             rwx_memory_regions: Vec::new(),
         };
@@ -311,9 +322,43 @@ pub fn inspect_process(pid: i32) -> ForensicReport {
         }
     }
 
+    // Key environment variables (USER, HOME, PWD, SHELL, PATH, LD_*, SUDO_*, SSH_*, DISPLAY...)
+    let mut environ_vars = Vec::new();
+    if let Ok(env_bytes) = fs::read(format!("/proc/{}/environ", pid)) {
+        const INTERESTING_PREFIXES: &[&str] = &[
+            "USER=",
+            "LOGNAME=",
+            "HOME=",
+            "PWD=",
+            "SHELL=",
+            "PATH=",
+            "LD_",
+            "SUDO_",
+            "SSH_",
+            "WAYLAND_DISPLAY=",
+            "DISPLAY=",
+        ];
+        for entry in env_bytes.split(|&b| b == 0) {
+            if entry.is_empty() {
+                continue;
+            }
+            let s = String::from_utf8_lossy(entry);
+            if INTERESTING_PREFIXES.iter().any(|p| s.starts_with(p)) {
+                environ_vars.push(s.into_owned());
+                if environ_vars.len() >= 20 {
+                    break;
+                }
+            }
+        }
+    }
+
+    let live_status = format!("ALIVE ({})", state);
+
     ForensicReport {
         pid,
         exists: true,
+        captured_at_epoch: now,
+        live_status,
         state,
         comm,
         exe,
@@ -328,6 +373,9 @@ pub fn inspect_process(pid: i32) -> ForensicReport {
         parent_chain,
         threads,
         rss_kb,
+        environ_vars,
+        network_sockets: Vec::new(),
+        alert_history: Vec::new(),
         open_fds,
         rwx_memory_regions,
     }
