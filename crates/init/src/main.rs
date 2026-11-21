@@ -1,3 +1,4 @@
+mod auth;
 mod kmod;
 mod net;
 
@@ -267,42 +268,8 @@ fn handle_multicall_applet() -> bool {
             }
             true
         }
-        "sudo" => {
-            let mut args: Vec<String> = std::env::args().skip(1).collect();
-            // Support common flags like `sudo -E <cmd>` or `sudo -- <cmd>`
-            while let Some(first) = args.first() {
-                if first == "-E" || first == "-H" || first == "--" {
-                    let is_end = first == "--";
-                    args.remove(0);
-                    if is_end {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-            if args.is_empty() {
-                eprintln!("Usage: sudo <command> [args...]");
-                std::process::exit(1);
-            }
-            let ruid = unsafe { libc::getuid() };
-            // Only allow root (0) or primary desktop user 'serenity' (1000)
-            if ruid != 0 && ruid != 1000 {
-                eprintln!("sudo: permission denied (uid {})", ruid);
-                std::process::exit(1);
-            }
-            unsafe {
-                if libc::setgid(0) != 0 || libc::setuid(0) != 0 {
-                    eprintln!("sudo: failed to escalate privileges: {}", io::Error::last_os_error());
-                    std::process::exit(1);
-                }
-                std::env::set_var("USER", "root");
-                std::env::set_var("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-            }
-            let err = Command::new(&args[0]).args(&args[1..]).exec();
-            eprintln!("sudo: {}: {}", args[0], err);
-            std::process::exit(127);
-        }
+        "sudo" => auth::run_sudo_applet(),
+        "passwd" => auth::run_passwd_applet(),
         "suspend" => {
             println!("[serenity] Syncing filesystems and entering sleep (suspend-to-RAM)...");
             unsafe { libc::sync(); }
@@ -372,9 +339,8 @@ fn handle_multicall_applet() -> bool {
             if !Path::new("/var/run").exists() {
                 let _ = std::os::unix::fs::symlink("/run", "/var/run");
             }
-            if Path::new("/usr/bin/dbus-daemon").exists()
-                && !Path::new("/run/dbus/system_bus_socket").exists()
-            {
+            let fresh_system_bus = !Path::new("/run/dbus/system_bus_socket").exists();
+            if Path::new("/usr/bin/dbus-daemon").exists() && fresh_system_bus {
                 println!("[serenity] Starting System D-Bus daemon...");
                 let _ = Command::new("/usr/bin/dbus-daemon")
                     .args(["--system", "--fork", "--nopidfile"])
@@ -389,7 +355,8 @@ fn handle_multicall_applet() -> bool {
                     thread::sleep(Duration::from_millis(50));
                 }
             }
-            if Path::new("/usr/bin/serenity-sysd").exists()
+            if fresh_system_bus
+                && Path::new("/usr/bin/serenity-sysd").exists()
                 && Path::new("/run/dbus/system_bus_socket").exists()
             {
                 println!("[serenity] Starting serenity-sysd (login1 + UPower)...");
@@ -402,7 +369,8 @@ fn handle_multicall_applet() -> bool {
                 // before cosmic-settings-daemon and cosmic-applet-battery connect.
                 thread::sleep(Duration::from_millis(250));
             }
-            if Path::new("/usr/bin/wpa_supplicant").exists()
+            if fresh_system_bus
+                && Path::new("/usr/bin/wpa_supplicant").exists()
                 && Path::new("/run/dbus/system_bus_socket").exists()
             {
                 let _ = fs::create_dir_all("/run/wpa_supplicant");
@@ -419,7 +387,8 @@ fn handle_multicall_applet() -> bool {
                     .stderr(wpa_err)
                     .spawn();
             }
-            if Path::new("/usr/bin/NetworkManager").exists()
+            if fresh_system_bus
+                && Path::new("/usr/bin/NetworkManager").exists()
                 && Path::new("/run/dbus/system_bus_socket").exists()
             {
                 println!("[serenity] Starting NetworkManager (Wi-Fi & Ethernet)...");
@@ -724,6 +693,30 @@ fn setup_desktop_permissions() {
     }
 }
 
+fn spawn_and_wait_desktop() {
+    if let Ok(mut desktop) = Command::new("/usr/bin/start-desktop").spawn() {
+        let desktop_pid = desktop.id() as libc::pid_t;
+        loop {
+            check_pending_power_action();
+            let mut status: libc::c_int = 0;
+            let waited = unsafe { libc::waitpid(-1, &mut status, 0) };
+            check_pending_power_action();
+            if waited == desktop_pid {
+                let _ = desktop.try_wait();
+                break;
+            }
+            if waited < 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                break;
+            }
+            reap_zombies();
+        }
+    }
+}
+
 fn main() {
     if handle_multicall_applet() {
         return;
@@ -788,27 +781,21 @@ fn main() {
         && detect_drm_card().is_some()
         && Path::new("/usr/bin/cosmic-session").exists()
     {
-        println!("[init] Auto-starting COSMIC Desktop (pass 'serenity.nogui' on kernel cmdline to stay in TTY)...");
-        if let Ok(mut desktop) = Command::new("/usr/bin/start-desktop").spawn() {
-            let desktop_pid = desktop.id() as libc::pid_t;
+        if auth::has_password("serenity") {
             loop {
                 check_pending_power_action();
-                let mut status: libc::c_int = 0;
-                let waited = unsafe { libc::waitpid(-1, &mut status, 0) };
+                auth::tty_login_gate("serenity", check_pending_power_action);
                 check_pending_power_action();
-                if waited == desktop_pid {
-                    let _ = desktop.try_wait();
-                    break;
-                }
-                if waited < 0 {
-                    let err = io::Error::last_os_error();
-                    if err.raw_os_error() == Some(libc::EINTR) {
-                        continue;
-                    }
-                    break;
-                }
-                reap_zombies();
+                println!("[init] Authenticated. Starting COSMIC Desktop...");
+                spawn_and_wait_desktop();
+                check_pending_power_action();
+                println!("\n[init] COSMIC Desktop exited. Returning to login prompt...");
+                thread::sleep(Duration::from_millis(500));
             }
+        } else {
+            println!("[init] No password set for 'serenity' (run 'passwd' after login to enable TTY login & sudo protection).");
+            println!("[init] Auto-starting COSMIC Desktop (pass 'serenity.nogui' on kernel cmdline to stay in TTY)...");
+            spawn_and_wait_desktop();
             check_pending_power_action();
             println!("\n[init] COSMIC Desktop exited. Falling back to Nushell...");
         }
@@ -816,6 +803,14 @@ fn main() {
 
     // PID 1 must never exit; exiting causes a Linux kernel panic.
     loop {
+        check_pending_power_action();
+        if !is_serial {
+            if auth::has_password("root") {
+                auth::tty_login_gate("root", check_pending_power_action);
+            } else if auth::has_password("serenity") {
+                auth::tty_login_gate("serenity", check_pending_power_action);
+            }
+        }
         check_pending_power_action();
         match spawn_shell() {
             Ok(mut child) => {

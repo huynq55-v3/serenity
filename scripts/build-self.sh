@@ -306,6 +306,7 @@ stage_rootfs() {
     ln -sf /init "${STAGE_DIR}/usr/bin/reboot"
     ln -sf /init "${STAGE_DIR}/usr/bin/suspend"
     ln -sf /init "${STAGE_DIR}/usr/bin/sudo"
+    ln -sf /init "${STAGE_DIR}/usr/bin/passwd"
     ln -sf /init "${STAGE_DIR}/usr/bin/cosmic-osd"
     ln -sf /init "${STAGE_DIR}/usr/bin/start-desktop"
 
@@ -345,6 +346,7 @@ install_staged_to_root() {
     as_root ln -sfn /init /usr/bin/reboot
     as_root ln -sfn /init /usr/bin/suspend
     as_root ln -sfn /init /usr/bin/sudo
+    as_root ln -sfn /init /usr/bin/passwd
     as_root ln -sfn /init /usr/bin/cosmic-osd
     as_root ln -sfn /init /usr/bin/start-desktop
 
@@ -361,7 +363,7 @@ install_staged_to_root() {
         [ -e "${item}" ] || continue
         local base
         base="$(basename "${item}")"
-        if { [ "${base}" = "passwd" ] || [ "${base}" = "group" ]; } && [ -e "/etc/${base}" ]; then
+        if { [ "${base}" = "passwd" ] || [ "${base}" = "group" ] || [ "${base}" = "shadow" ]; } && [ -e "/etc/${base}" ]; then
             continue
         fi
         as_root cp -rP --preserve=mode,timestamps --no-preserve=ownership "${item}" /etc/
