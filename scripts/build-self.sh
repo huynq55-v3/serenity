@@ -140,6 +140,27 @@ EOF
     rm -rf "${tmp_dir}"
 }
 
+fix_clang_resource_headers() {
+    command -v clang >/dev/null 2>&1 || return 0
+    local clang_res clang_major src_inc
+    clang_res="$(clang -print-resource-dir 2>/dev/null || true)"
+    [ -n "${clang_res}" ] || return 0
+    if [ -f "${clang_res}/include/immintrin.h" ]; then
+        return 0
+    fi
+    clang_major="$(basename "${clang_res}")"
+    for src_inc in \
+        "/usr/lib/llvm-${clang_major}/lib/clang/${clang_major}/include" \
+        "/usr/include/clang/${clang_major}/include"; do
+        if [ -f "${src_inc}/immintrin.h" ]; then
+            echo "[self-build] Linking Clang resource headers into ${clang_res}/include..."
+            as_root mkdir -p "${clang_res}"
+            as_root ln -sfn "${src_inc}" "${clang_res}/include"
+            return 0
+        fi
+    done
+}
+
 check_host_tools() {
     local missing=()
     for cmd in cargo rustc curl tar xz gzip install cp ln mv awk sed grep find mktemp; do
@@ -169,6 +190,7 @@ ensure_musl_toolchain() {
 
     if [ "${NO_INSTALL}" -eq 0 ]; then
         fix_glibc_linker_scripts
+        fix_clang_resource_headers
     fi
 
     if [ ! -d "/usr/lib/rustlib/${MUSL_TARGET}/lib" ]; then
@@ -412,6 +434,7 @@ install_remote_packages() {
     fi
 
     fix_glibc_linker_scripts
+    fix_clang_resource_headers
 }
 
 main() {

@@ -74,16 +74,9 @@ ln -sf llvm-ar "${STAGE_DIR}/usr/bin/ar"
 
 # Copy Clang builtin headers + musl headers/libs so x86_64-unknown-linux-musl builds C/ASM crates (e.g. ring)
 CLANG_RES="$(clang -print-resource-dir)"
-if [ -d "${CLANG_RES}/include" ]; then
-    mkdir -p "${STAGE_DIR}${CLANG_RES}"
-    cp -rL "${CLANG_RES}/include" "${STAGE_DIR}${CLANG_RES}/"
-fi
-for inc in /usr/include/clang/*/include; do
-    if [ -d "${inc}" ]; then
-        mkdir -p "${STAGE_DIR}$(dirname "${inc}")"
-        cp -rL "${inc}" "${STAGE_DIR}$(dirname "${inc}")/"
-    fi
-done
+CLANG_MAJOR="$(basename "${CLANG_RES}")"
+mkdir -p "${STAGE_DIR}/usr/lib/clang/${CLANG_MAJOR}"
+cp -rL "${CLANG_RES}/include" "${STAGE_DIR}/usr/lib/clang/${CLANG_MAJOR}/"
 mkdir -p "${STAGE_DIR}/usr/include" "${STAGE_DIR}/usr/lib"
 cp -rL /usr/include/x86_64-linux-musl "${STAGE_DIR}/usr/include/"
 cp -rL /usr/lib/x86_64-linux-musl "${STAGE_DIR}/usr/lib/"
@@ -126,7 +119,8 @@ fi
 test -d "${STAGE_DIR}/usr/lib/rustlib/x86_64-unknown-linux-musl/lib"
 test -x "${STAGE_DIR}/usr/bin/llvm-ar"
 test -f "${STAGE_DIR}/usr/include/x86_64-linux-musl/sys/auxv.h"
-test -f "${STAGE_DIR}${CLANG_RES}/include/stddef.h"
+test -f "${STAGE_DIR}/usr/lib/clang/${CLANG_MAJOR}/include/stddef.h"
+test -f "${STAGE_DIR}/usr/lib/clang/${CLANG_MAJOR}/include/immintrin.h"
 grep -q ' /usr/lib/x86_64-linux-gnu/libc.so.6 ' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libc.so"
 grep -q ' /usr/lib/x86_64-linux-gnu/libm.so.6 ' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libm.so"
 ! grep -q ' /lib/x86_64-linux-gnu/' "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libc.so"
