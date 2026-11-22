@@ -1,0 +1,176 @@
+[package]
+name = "nvm"
+version = "0.40.3"
+arch = "x86_64-gnu"
+description = "Node Version Manager (nvm) + node/npm/npx/corepack shims for Nushell & Bash"
+deps = ["clibrary", "bash"]
+
+[source]
+type = "custom"
+script = """
+NVM_TAG="v${PKG_VERSION}"
+NVM_RAW="https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_TAG}"
+
+mkdir -p "${STAGE_DIR}/usr/share/nvm" "${STAGE_DIR}/usr/bin"
+
+echo "  -> Downloading nvm ${NVM_TAG} (nvm.sh + nvm-exec)..."
+curl -fsSL "${NVM_RAW}/nvm.sh" -o "${STAGE_DIR}/usr/share/nvm/nvm.sh"
+curl -fsSL "${NVM_RAW}/nvm-exec" -o "${STAGE_DIR}/usr/share/nvm/nvm-exec"
+chmod 0755 "${STAGE_DIR}/usr/share/nvm/nvm.sh" "${STAGE_DIR}/usr/share/nvm/nvm-exec"
+
+# Bundle GNU extraction & download tools expected by nvm.sh when installing Node.js tarballs
+copy_with_deps() {
+    local bin="$1"
+    local dst="$2"
+    mkdir -p "$(dirname "${dst}")"
+    cp -L "${bin}" "${dst}"
+    chmod 0755 "${dst}"
+    ldd "${bin}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+        [ -f "${lib}" ] || continue
+        case "$(basename "${lib}")" in
+            ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
+        esac
+        local norm="${lib}"
+        case "${norm}" in
+            /lib/x86_64-linux-gnu/*) norm="/usr${norm}" ;;
+        esac
+        local ldst="${STAGE_DIR}${norm}"
+        mkdir -p "$(dirname "${ldst}")"
+        [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
+    done
+}
+
+for tool in curl xz tar gzip grep sed gawk; do
+    BIN_PATH="$(command -v "${tool}" || true)"
+    if [ -z "${BIN_PATH}" ] || [ ! -x "${BIN_PATH}" ]; then
+        echo "ERROR: Missing required tool '${tool}' on build host" >&2
+        exit 1
+    fi
+    copy_with_deps "${BIN_PATH}" "${STAGE_DIR}/usr/bin/${tool}"
+done
+
+ln -sf gawk "${STAGE_DIR}/usr/bin/awk"
+ln -sf /bin/env "${STAGE_DIR}/usr/bin/env"
+"""
+
+[install.inline]
+"etc/profile.d/nvm.sh" = """export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+[ -s "/usr/share/nvm/nvm.sh" ] && . "/usr/share/nvm/nvm.sh"
+if [ -d "${NVM_DIR}/current/bin" ]; then
+    PATH="${NVM_DIR}/current/bin:${PATH}"
+fi
+"""
+
+[install.scripts]
+"usr/bin/nvm" = """#!/bin/bash
+set -e
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+export SSL_CERT_FILE="${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}"
+export CURL_CA_BUNDLE="${CURL_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}"
+export PATH="/usr/bin:/bin:/sbin:/usr/sbin:${PATH}"
+
+mkdir -p "${NVM_DIR}"
+. "/usr/share/nvm/nvm.sh" --no-use
+
+nvm "$@"
+rc=$?
+
+case "${1:-}" in
+    install|use|alias|uninstall)
+        cur="$(nvm current 2>/dev/null || true)"
+        if [ -z "${cur}" ] || [ "${cur}" = "none" ] || [ "${cur}" = "system" ]; then
+            def="$(nvm version default 2>/dev/null || true)"
+            if [ -n "${def}" ] && [ "${def}" != "N/A" ]; then
+                cur="${def}"
+            fi
+        fi
+        if [ -n "${cur}" ] && [ -d "${NVM_DIR}/versions/node/${cur}" ]; then
+            ln -sfn "${NVM_DIR}/versions/node/${cur}" "${NVM_DIR}/current"
+            if [ "${1:-}" = "install" ]; then
+                def_now="$(nvm alias default 2>/dev/null || true)"
+                case "${def_now}" in
+                    *"N/A"*|"") nvm alias default "${cur}" >/dev/null 2>&1 || true ;;
+                esac
+            fi
+        fi
+        ;;
+esac
+
+exit "${rc}"
+"""
+
+"usr/bin/node" = """#!/bin/sh
+NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+TARGET_DIR=""
+if [ -x "${NVM_DIR}/current/bin/node" ]; then
+    TARGET_DIR="${NVM_DIR}/current"
+elif [ -d "${NVM_DIR}/versions/node" ]; then
+    LATEST="$(ls -1 "${NVM_DIR}/versions/node" 2>/dev/null | tail -n 1)"
+    if [ -n "${LATEST}" ] && [ -x "${NVM_DIR}/versions/node/${LATEST}/bin/node" ]; then
+        TARGET_DIR="${NVM_DIR}/versions/node/${LATEST}"
+    fi
+fi
+if [ -z "${TARGET_DIR}" ] || [ ! -x "${TARGET_DIR}/bin/node" ]; then
+    echo "[nvm] No Node.js version installed yet. Run: nvm install --lts" >&2
+    exit 127
+fi
+export PATH="${TARGET_DIR}/bin:${PATH}"
+exec "${TARGET_DIR}/bin/node" "$@"
+"""
+
+"usr/bin/npm" = """#!/bin/sh
+NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+TARGET_DIR=""
+if [ -x "${NVM_DIR}/current/bin/npm" ]; then
+    TARGET_DIR="${NVM_DIR}/current"
+elif [ -d "${NVM_DIR}/versions/node" ]; then
+    LATEST="$(ls -1 "${NVM_DIR}/versions/node" 2>/dev/null | tail -n 1)"
+    if [ -n "${LATEST}" ] && [ -x "${NVM_DIR}/versions/node/${LATEST}/bin/npm" ]; then
+        TARGET_DIR="${NVM_DIR}/versions/node/${LATEST}"
+    fi
+fi
+if [ -z "${TARGET_DIR}" ] || [ ! -x "${TARGET_DIR}/bin/npm" ]; then
+    echo "[nvm] No Node.js/npm installed yet. Run: nvm install --lts" >&2
+    exit 127
+fi
+export PATH="${TARGET_DIR}/bin:${PATH}"
+exec "${TARGET_DIR}/bin/npm" "$@"
+"""
+
+"usr/bin/npx" = """#!/bin/sh
+NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+TARGET_DIR=""
+if [ -x "${NVM_DIR}/current/bin/npx" ]; then
+    TARGET_DIR="${NVM_DIR}/current"
+elif [ -d "${NVM_DIR}/versions/node" ]; then
+    LATEST="$(ls -1 "${NVM_DIR}/versions/node" 2>/dev/null | tail -n 1)"
+    if [ -n "${LATEST}" ] && [ -x "${NVM_DIR}/versions/node/${LATEST}/bin/npx" ]; then
+        TARGET_DIR="${NVM_DIR}/versions/node/${LATEST}"
+    fi
+fi
+if [ -z "${TARGET_DIR}" ] || [ ! -x "${TARGET_DIR}/bin/npx" ]; then
+    echo "[nvm] No Node.js/npx installed yet. Run: nvm install --lts" >&2
+    exit 127
+fi
+export PATH="${TARGET_DIR}/bin:${PATH}"
+exec "${TARGET_DIR}/bin/npx" "$@"
+"""
+
+"usr/bin/corepack" = """#!/bin/sh
+NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+TARGET_DIR=""
+if [ -x "${NVM_DIR}/current/bin/corepack" ]; then
+    TARGET_DIR="${NVM_DIR}/current"
+elif [ -d "${NVM_DIR}/versions/node" ]; then
+    LATEST="$(ls -1 "${NVM_DIR}/versions/node" 2>/dev/null | tail -n 1)"
+    if [ -n "${LATEST}" ] && [ -x "${NVM_DIR}/versions/node/${LATEST}/bin/corepack" ]; then
+        TARGET_DIR="${NVM_DIR}/versions/node/${LATEST}"
+    fi
+fi
+if [ -z "${TARGET_DIR}" ] || [ ! -x "${TARGET_DIR}/bin/corepack" ]; then
+    echo "[nvm] No Node.js/corepack installed yet. Run: nvm install --lts" >&2
+    exit 127
+fi
+export PATH="${TARGET_DIR}/bin:${PATH}"
+exec "${TARGET_DIR}/bin/corepack" "$@"
+"""

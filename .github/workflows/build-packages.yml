@@ -187,6 +187,9 @@ jobs:
               elif [ "${{ matrix.package }}" = "linux-firmware" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends zstd git make rdfind parallel python3 curl rsync
+              elif [ "${{ matrix.package }}" = "nvm" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends zstd curl ca-certificates xz-utils tar gzip gawk grep sed
               else
                 command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
               fi
