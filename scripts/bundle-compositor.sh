@@ -67,7 +67,8 @@ if [ -d "${libdir}" ]; then
     for pat in \
         "libdl.so*" "libpthread.so*" "librt.so*" "libresolv.so*" "libnss_files.so*" "libnss_dns.so*" \
         "libcap.so*" "libcap-ng.so*" \
-        "libEGL*.so*" "libGLESv2*.so*" "libGLdispatch*.so*" "libgbm*.so*" "libgallium*.so*" \
+        "libEGL*.so*" "libGLESv2*.so*" "libGL.so*" "libGLX*.so*" "libGLdispatch*.so*" "libgbm*.so*" "libgallium*.so*" \
+        "libxcb-glx*.so*" "libXxf86vm*.so*" \
         "libwayland-*.so*" "libxkb*.so*" \
         "libdisplay-info*.so*" "libseat*.so*" "libpixman-1*.so*" "libdav1d*.so*" \
         "libfontconfig*.so*" "libfreetype*.so*" "libsystemd*.so*" \

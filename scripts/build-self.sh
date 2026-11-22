@@ -186,6 +186,58 @@ fix_ldconfig_and_cache() {
         fi
     fi
 
+    # Ensure 64-bit libGL.so.1 & libGLX.so.0 are also present in /usr/lib/x86_64-linux-gnu/
+    local libdir64="/usr/lib/x86_64-linux-gnu"
+    as_root mkdir -p "${libdir64}"
+    for gl_base in libGL.so.1 libGLX.so.0; do
+        if [ ! -e "${libdir64}/${gl_base}" ] && [ -e "/lib/x86_64-linux-gnu/${gl_base}" ]; then
+            atomic_install 0644 "/lib/x86_64-linux-gnu/${gl_base}" "${libdir64}/${gl_base}"
+        fi
+    done
+
+    # Install missing 64-bit Mesa GLX stack (libGLX_mesa.so.0, libxcb-glx.so.0, libXxf86vm.so.1)
+    # needed by SteamRT pressure-vessel and 64-bit OpenGL/GLX games (e.g. Slay the Spire)
+    if { [ ! -e "${libdir64}/libGLX_mesa.so.0" ] || [ ! -e "${libdir64}/libxcb-glx.so.0" ] || [ ! -e "${libdir64}/libXxf86vm.so.1" ]; } \
+        && [ -x /usr/bin/spkg ] && /usr/bin/spkg help 2>/dev/null | grep -q unzstd; then
+        echo "[self-build] Installing missing 64-bit Mesa GLX libraries (libGLX_mesa, libxcb-glx, libXxf86vm)..."
+        mkdir -p "${DL_DIR}"
+        local glx_tmp
+        glx_tmp="$(mktemp -d)"
+        local installed_glx=0
+        for deb_url in \
+            "http://archive.ubuntu.com/ubuntu/pool/main/m/mesa/libglx-mesa0_25.2.8-0ubuntu0.24.04.5_amd64.deb" \
+            "http://archive.ubuntu.com/ubuntu/pool/main/libx/libxcb/libxcb-glx0_1.15-1ubuntu2_amd64.deb" \
+            "http://archive.ubuntu.com/ubuntu/pool/main/libx/libxxf86vm/libxxf86vm1_1.1.4-1build4_amd64.deb"; do
+            local deb_name
+            deb_name="$(basename "${deb_url}")"
+            if [ ! -f "${DL_DIR}/${deb_name}" ]; then
+                curl -fL --progress-bar "${deb_url}" -o "${DL_DIR}/${deb_name}.tmp" || continue
+                mv -f "${DL_DIR}/${deb_name}.tmp" "${DL_DIR}/${deb_name}"
+            fi
+            (cd "${glx_tmp}" && ar x "${DL_DIR}/${deb_name}") || continue
+            if [ -f "${glx_tmp}/data.tar.zst" ]; then
+                /usr/bin/spkg unzstd "${glx_tmp}/data.tar.zst" | tar -xf - -C "${glx_tmp}"
+                installed_glx=1
+            elif [ -f "${glx_tmp}/data.tar.xz" ]; then
+                tar -xf "${glx_tmp}/data.tar.xz" -C "${glx_tmp}"
+                installed_glx=1
+            fi
+            rm -f "${glx_tmp}"/data.tar.* "${glx_tmp}"/control.tar.* "${glx_tmp}/debian-binary"
+        done
+        if [ "${installed_glx}" -eq 1 ] && [ -d "${glx_tmp}/usr/lib/x86_64-linux-gnu" ]; then
+            as_root cp -a "${glx_tmp}/usr/lib/x86_64-linux-gnu/." "${libdir64}/"
+            if [ -d "${glx_tmp}/usr/share/glvnd/egl_vendor.d" ]; then
+                as_root mkdir -p /usr/share/glvnd/egl_vendor.d
+                as_root cp -a "${glx_tmp}/usr/share/glvnd/egl_vendor.d/." /usr/share/glvnd/egl_vendor.d/
+            fi
+            # Clear cached Steam pressure-vessel overrides so SteamRT re-captures 64-bit libGLX_mesa
+            rm -rf /home/serenity/.local/share/Steam/steamrt64/pv-runtime/steam-runtime-steamrt/var/tmp-* \
+                   /home/serenity/.local/share/Steam/steamapps/common/SteamLinuxRuntime_soldier/var/tmp-* \
+                   /home/serenity/.local/share/Steam/steamapps/common/SteamLinuxRuntime/var/tmp-* 2>/dev/null || true
+        fi
+        rm -rf "${glx_tmp}"
+    fi
+
     if [ -x /sbin/ldconfig ] && ! grep -q 'ldconfig\.real' /sbin/ldconfig 2>/dev/null; then
         echo "[self-build] Updating /etc/ld.so.cache and /var/cache/ldconfig/ld.so.cache..."
         as_root /sbin/ldconfig -X 2>/dev/null || true

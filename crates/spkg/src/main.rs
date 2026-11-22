@@ -17,6 +17,7 @@ fn print_usage() {
     println!("  spkg install <pkg...>         Install package(s) and dependencies");
     println!("  spkg remove [--force] <pkg..> Remove installed package(s)");
     println!("  spkg list                     List installed packages");
+    println!("  spkg unzstd [file]            Decompress zstd stream or file to stdout");
 }
 
 fn cmd_update() -> Result<(), String> {
@@ -228,6 +229,30 @@ fn cmd_list() -> Result<(), String> {
     Ok(())
 }
 
+fn cmd_unzstd(args: &[String]) -> Result<(), String> {
+    use std::io::{self, BufReader};
+    let mut stdout = io::stdout().lock();
+    match args.first().map(String::as_str) {
+        Some(path) if path != "-" => {
+            let file = fs::File::open(path)
+                .map_err(|e| format!("failed to open {}: {}", path, e))?;
+            let reader = BufReader::new(file);
+            let mut decoder = ruzstd::decoding::StreamingDecoder::new(reader)
+                .map_err(|e| format!("invalid zstd stream {}: {:?}", path, e))?;
+            io::copy(&mut decoder, &mut stdout)
+                .map_err(|e| format!("zstd decompress {} failed: {}", path, e))?;
+        }
+        _ => {
+            let stdin = io::stdin().lock();
+            let mut decoder = ruzstd::decoding::StreamingDecoder::new(stdin)
+                .map_err(|e| format!("invalid zstd stream: {:?}", e))?;
+            io::copy(&mut decoder, &mut stdout)
+                .map_err(|e| format!("zstd decompress failed: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
@@ -245,6 +270,7 @@ fn main() -> ExitCode {
         "install" => cmd_install(&args[1..]),
         "remove" | "uninstall" => cmd_remove(&args[1..]),
         "list" => cmd_list(),
+        "unzstd" => cmd_unzstd(&args[1..]),
         "-h" | "--help" | "help" => {
             print_usage();
             Ok(())

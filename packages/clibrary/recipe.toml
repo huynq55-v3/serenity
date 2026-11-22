@@ -1,6 +1,6 @@
 [package]
 name = "clibrary"
-version = "1.0.5"
+version = "1.0.6"
 arch = "x86_64-gnu"
 description = "Common Linux C/C++ runtime libraries (GTK3 + GSettings + Glycin/gdk-pixbuf + MIME, NSS, NSPR, Cairo, Pango, ATK, X11, ALSA, CUPS, Kerberos, GLib) for Chrome, Antigravity & Electron apps"
 deps = []
@@ -45,7 +45,11 @@ patterns = [
     "libatk-1.0.so*",
     "libatk-bridge-2.0.so*",
     "libatspi.so*",
-    # X11 / XCB compatibility libraries (linked by Chrome even under Wayland)
+    # X11 / XCB / GLX OpenGL compatibility libraries (linked by Chrome, SteamRT & 64-bit games under Xwayland)
+    "libGL.so*",
+    "libGLX.so*",
+    "libGLX_mesa.so*",
+    "libGLX_indirect.so*",
     "libX11.so*",
     "libXcomposite.so*",
     "libXdamage.so*",
@@ -55,6 +59,8 @@ patterns = [
     "libXrandr.so*",
     "libXrender.so*",
     "libXRes.so*",
+    "libXxf86vm.so*",
+    "libxcb-glx.so*",
     "libxcb-render.so*",
     "libxcb-shm.so*",
     # Audio, printing, Kerberos & C++ runtime
