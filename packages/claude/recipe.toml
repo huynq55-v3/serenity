@@ -1,0 +1,9 @@
+[package]
+name = "claude"
+version = "6.28899.6"
+arch = "any"
+description = "Claude Desktop alias package (installs claude-desktop)"
+deps = ["claude-desktop"]
+
+[source]
+type = "meta"

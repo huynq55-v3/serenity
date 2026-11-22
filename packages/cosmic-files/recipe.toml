@@ -24,6 +24,26 @@ case "$TARGET" in
             exec google-chrome "$TARGET"
         fi
         ;;
+    claude://*)
+        if [ -x /usr/bin/claude-desktop ]; then
+            exec /usr/bin/claude-desktop "$TARGET"
+        fi
+        ;;
+    antigravity://*)
+        if [ -x /usr/bin/antigravity ]; then
+            exec /usr/bin/antigravity "$TARGET"
+        fi
+        ;;
+    steam://*)
+        if [ -x /usr/bin/steam ]; then
+            exec /usr/bin/steam "$TARGET"
+        fi
+        ;;
+    zed://*)
+        if [ -x /usr/bin/zed ]; then
+            exec /usr/bin/zed "$TARGET"
+        fi
+        ;;
     file://*)
         TARGET="${TARGET#file://}"
         ;;

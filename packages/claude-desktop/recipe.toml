@@ -1,0 +1,186 @@
+[package]
+name = "claude-desktop"
+version = "6.28899.6"
+arch = "x86_64-gnu"
+description = "Claude Desktop for Linux (official Anthropic .deb, Wayland native + Claude Code & Cowork)"
+deps = ["clibrary"]
+
+[source]
+type = "custom"
+script = """
+REPO_BASE="https://downloads.claude.ai/claude-desktop/apt/stable"
+PKG_IDX="$(curl -fsSL "${REPO_BASE}/dists/stable/main/binary-amd64/Packages")"
+REL_PATH="$(printf '%s\n' "${PKG_IDX}" | grep '^Filename: pool/main/c/claude-desktop/claude-desktop_' | sort -V | tail -n 1 | cut -d' ' -f2)"
+if [ -z "${REL_PATH}" ]; then
+    echo "ERROR: Could not locate claude-desktop amd64 .deb in Anthropic APT index" >&2
+    exit 1
+fi
+
+DEB_PATH="${WORK_DIR}/claude-desktop.deb"
+echo "  -> Downloading ${REPO_BASE}/${REL_PATH}..."
+curl -fsSL "${REPO_BASE}/${REL_PATH}" -o "${DEB_PATH}"
+
+DEB_EXTRACT="${WORK_DIR}/deb"
+mkdir -p "${DEB_EXTRACT}"
+(cd "${DEB_EXTRACT}" && ar x "${DEB_PATH}")
+DATA_TAR="$(find "${DEB_EXTRACT}" -maxdepth 1 -name 'data.tar.*' | head -n 1)"
+if [ -z "${DATA_TAR}" ]; then
+    echo "ERROR: No data.tar.* found in claude-desktop .deb" >&2
+    exit 1
+fi
+echo "  -> Extracting ${DATA_TAR}..."
+tar -xf "${DATA_TAR}" -C "${STAGE_DIR}"
+
+rm -rf "${STAGE_DIR}/etc/apt" "${STAGE_DIR}/etc/cron.daily" \
+       "${STAGE_DIR}/usr/share/keyrings" "${STAGE_DIR}/usr/share/doc" "${STAGE_DIR}/usr/share/man"
+
+copy_with_deps() {
+    local bin="$1"
+    local dst="$2"
+    mkdir -p "$(dirname "${dst}")"
+    if [ "${bin}" != "${dst}" ]; then
+        cp -L "${bin}" "${dst}"
+        chmod 0755 "${dst}"
+    fi
+    ldd "${dst}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\\//) print $i}' | sort -u | while read -r lib; do
+        [ -f "${lib}" ] || continue
+        case "$(basename "${lib}")" in
+            ld-linux-*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*) continue ;;
+        esac
+        local norm="${lib}"
+        case "${norm}" in
+            /lib/x86_64-linux-gnu/*) norm="/usr${norm}" ;;
+        esac
+        local ldst="${STAGE_DIR}${norm}"
+        mkdir -p "$(dirname "${ldst}")"
+        [ -e "${ldst}" ] || cp -L "${lib}" "${ldst}"
+    done
+}
+
+# Resolve real claude-desktop ELF binary inside STAGE_DIR without escaping STAGE_DIR
+REAL_BIN=""
+if [ -L "${STAGE_DIR}/usr/bin/claude-desktop" ]; then
+    LINK_TARGET="$(readlink "${STAGE_DIR}/usr/bin/claude-desktop")"
+    case "${LINK_TARGET}" in
+        /*) REAL_BIN="${LINK_TARGET}" ;;
+        *)
+            REAL_BIN="$(python3 -c 'import os,sys; print("/"+os.path.relpath(os.path.normpath(os.path.join(sys.argv[1],"usr/bin",sys.argv[2])), sys.argv[1]))' "${STAGE_DIR}" "${LINK_TARGET}")"
+            ;;
+    esac
+    rm -f "${STAGE_DIR}/usr/bin/claude-desktop"
+elif [ -f "${STAGE_DIR}/usr/bin/claude-desktop" ]; then
+    mkdir -p "${STAGE_DIR}/usr/lib/claude-desktop"
+    mv -f "${STAGE_DIR}/usr/bin/claude-desktop" "${STAGE_DIR}/usr/lib/claude-desktop/claude-desktop.bin"
+    REAL_BIN="/usr/lib/claude-desktop/claude-desktop.bin"
+fi
+
+if [ -z "${REAL_BIN}" ] || [ ! -x "${STAGE_DIR}${REAL_BIN}" ]; then
+    FOUND="$(find "${STAGE_DIR}/usr/lib" "${STAGE_DIR}/opt" -maxdepth 4 -type f -name 'claude-desktop' 2>/dev/null | head -n 1 || true)"
+    if [ -n "${FOUND}" ] && [ -x "${FOUND}" ]; then
+        REAL_BIN="${FOUND#${STAGE_DIR}}"
+    fi
+fi
+
+if [ -z "${REAL_BIN}" ] || [ ! -x "${STAGE_DIR}${REAL_BIN}" ]; then
+    echo "ERROR: Could not locate claude-desktop ELF binary inside extracted package" >&2
+    exit 1
+fi
+echo "  -> Real claude-desktop binary: ${REAL_BIN}"
+
+# Bundle libXtst, libuuid, appindicator (if present), socat, and shared deps of claude-desktop
+mkdir -p "${STAGE_DIR}/usr/lib/x86_64-linux-gnu" "${STAGE_DIR}/usr/bin"
+for pat in "libXtst.so*" "libuuid.so*" "libayatana-appindicator3.so*"; do
+    for libdir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu; do
+        for f in ${libdir}/${pat}; do
+            [ -e "$f" ] || continue
+            [ -e "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/$(basename "$f")" ] || cp -a "$f" "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/"
+        done
+    done
+done
+
+if command -v socat >/dev/null 2>&1; then
+    copy_with_deps "$(command -v socat)" "${STAGE_DIR}/usr/bin/socat"
+fi
+copy_with_deps "${STAGE_DIR}${REAL_BIN}" "${STAGE_DIR}${REAL_BIN}"
+
+# Install Wayland + basic-keyring launcher wrapper at /usr/bin/claude-desktop
+cat > "${STAGE_DIR}/usr/bin/claude-desktop" <<'EOF'
+#!/bin/sh
+EXTRA_FLAGS=""
+for drv in /sys/class/drm/card*/device/driver; do
+    if [ -L "$drv" ]; then
+        case "$(readlink "$drv")" in
+            *virtio*) EXTRA_FLAGS="--disable-gpu --disable-gpu-compositing" ;;
+        esac
+    fi
+done
+exec "__REAL_BIN__" --ozone-platform-hint=auto --ozone-platform=wayland --password-store=basic $EXTRA_FLAGS "$@"
+EOF
+sed -i "s|__REAL_BIN__|${REAL_BIN}|g" "${STAGE_DIR}/usr/bin/claude-desktop"
+chmod 0755 "${STAGE_DIR}/usr/bin/claude-desktop"
+
+if [ ! -e "${STAGE_DIR}/usr/bin/claude" ]; then
+    ln -sf /usr/bin/claude-desktop "${STAGE_DIR}/usr/bin/claude"
+fi
+
+# Ensure desktop entry invokes our Wayland wrapper
+for df in "${STAGE_DIR}/usr/share/applications/"*.desktop; do
+    [ -f "$df" ] || continue
+    sed -i 's|^Exec=.*|Exec=/usr/bin/claude-desktop %U|' "$df"
+done
+
+# Ensure a 256x256 hicolor PNG icon exists for COSMIC Launcher / Dock if bundled elsewhere
+if [ ! -f "${STAGE_DIR}/usr/share/icons/hicolor/256x256/apps/claude-desktop.png" ]; then
+    ICON_SRC="$(find "${STAGE_DIR}" -type f -iname '*claude*.png' 2>/dev/null | sort | tail -n 1 || true)"
+    if [ -n "${ICON_SRC}" ] && [ -f "${ICON_SRC}" ]; then
+        mkdir -p "${STAGE_DIR}/usr/share/icons/hicolor/256x256/apps"
+        cp "${ICON_SRC}" "${STAGE_DIR}/usr/share/icons/hicolor/256x256/apps/claude-desktop.png"
+    fi
+fi
+"""
+
+[install.scripts]
+"usr/bin/xdg-open" = """#!/bin/sh
+if [ $# -lt 1 ]; then
+    exit 1
+fi
+TARGET="$1"
+case "$TARGET" in
+    http://*|https://*)
+        if command -v google-chrome >/dev/null 2>&1; then
+            exec google-chrome "$TARGET"
+        fi
+        ;;
+    claude://*)
+        if [ -x /usr/bin/claude-desktop ]; then
+            exec /usr/bin/claude-desktop "$TARGET"
+        fi
+        ;;
+    antigravity://*)
+        if [ -x /usr/bin/antigravity ]; then
+            exec /usr/bin/antigravity "$TARGET"
+        fi
+        ;;
+    steam://*)
+        if [ -x /usr/bin/steam ]; then
+            exec /usr/bin/steam "$TARGET"
+        fi
+        ;;
+    zed://*)
+        if [ -x /usr/bin/zed ]; then
+            exec /usr/bin/zed "$TARGET"
+        fi
+        ;;
+    file://*)
+        TARGET="${TARGET#file://}"
+        ;;
+esac
+
+if [ -d "$TARGET" ]; then
+    exec /usr/bin/cosmic-files "$TARGET"
+elif [ -e "$TARGET" ]; then
+    PARENT="$(dirname "$TARGET")"
+    exec /usr/bin/cosmic-files "$PARENT"
+fi
+exec /usr/bin/cosmic-files "$TARGET"
+"""

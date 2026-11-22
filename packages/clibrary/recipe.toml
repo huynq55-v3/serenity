@@ -59,6 +59,7 @@ patterns = [
     "libXrandr.so*",
     "libXrender.so*",
     "libXRes.so*",
+    "libXtst.so*",
     "libXxf86vm.so*",
     "libxcb-glx.so*",
     "libxcb-render.so*",
