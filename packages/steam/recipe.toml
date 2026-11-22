@@ -1,6 +1,6 @@
 [package]
 name = "steam"
-version = "1.0.3"
+version = "1.0.4"
 arch = "x86_64-gnu"
 description = "Steam gaming client (official deb + Xwayland + lib32 + GNU runtime utilities)"
 deps = ["clibrary", "pipewire", "xwayland", "lib32", "bash"]
@@ -82,11 +82,19 @@ if [ -f /usr/share/misc/magic.mgc ]; then
     cp -L /usr/share/misc/magic.mgc "${STAGE_DIR}/usr/share/misc/magic.mgc"
 fi
 
-LDCONFIG_BIN="$(command -v ldconfig || echo /sbin/ldconfig)"
-if [ -x "${LDCONFIG_BIN}" ]; then
-    cp -L "${LDCONFIG_BIN}" "${STAGE_DIR}/sbin/ldconfig"
+LDCONFIG_SRC=""
+for cand in /sbin/ldconfig.real /usr/sbin/ldconfig.real /sbin/ldconfig /usr/sbin/ldconfig; do
+    if [ -x "${cand}" ] && ! grep -q 'ldconfig\.real' "${cand}" 2>/dev/null; then
+        LDCONFIG_SRC="${cand}"
+        break
+    fi
+done
+if [ -n "${LDCONFIG_SRC}" ]; then
+    cp -L "${LDCONFIG_SRC}" "${STAGE_DIR}/sbin/ldconfig"
     chmod 0755 "${STAGE_DIR}/sbin/ldconfig"
+    ln -sf /sbin/ldconfig "${STAGE_DIR}/sbin/ldconfig.real"
     ln -sf /sbin/ldconfig "${STAGE_DIR}/usr/sbin/ldconfig"
+    ln -sf /sbin/ldconfig "${STAGE_DIR}/usr/sbin/ldconfig.real"
 fi
 
 # Ensure steam.desktop Exec points to our wrapper

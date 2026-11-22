@@ -139,8 +139,35 @@ fn cmd_install(targets: &[String]) -> Result<(), String> {
             files.len()
         );
     }
+    refresh_ldconfig_cache();
     let _ = std::process::Command::new("/bin/sync").status();
     Ok(())
+}
+
+fn refresh_ldconfig_cache() {
+    let ldconfig = Path::new("/sbin/ldconfig");
+    if !ldconfig.exists() {
+        return;
+    }
+    let has_real = Path::new("/sbin/ldconfig.real").exists();
+    let is_elf = fs::read(ldconfig)
+        .map(|b| b.starts_with(b"\x7fELF"))
+        .unwrap_or(false);
+    if !has_real && !is_elf {
+        return;
+    }
+    let _ = std::process::Command::new(ldconfig)
+        .arg("-X")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if Path::new("/etc/ld.so.cache").exists() {
+        let _ = fs::create_dir_all("/var/cache/ldconfig");
+        let cache_link = Path::new("/var/cache/ldconfig/ld.so.cache");
+        let _ = fs::remove_file(cache_link);
+        let _ = std::os::unix::fs::symlink("/etc/ld.so.cache", cache_link);
+    }
 }
 
 fn cmd_remove(args: &[String]) -> Result<(), String> {

@@ -686,6 +686,27 @@ fn setup_desktop_permissions() {
         }
     }
 
+    // Ensure dynamic linker cache exists for SteamRT capsule/pressure-vessel & glibc apps
+    let ldconfig_path = Path::new("/sbin/ldconfig");
+    if ldconfig_path.exists() {
+        let has_real = Path::new("/sbin/ldconfig.real").exists();
+        let is_elf = fs::read(ldconfig_path)
+            .map(|b| b.starts_with(b"\x7fELF"))
+            .unwrap_or(false);
+        if (has_real || is_elf) && !Path::new("/etc/ld.so.cache").exists() {
+            let _ = Command::new(ldconfig_path)
+                .arg("-X")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        if Path::new("/etc/ld.so.cache").exists() && !Path::new("/var/cache/ldconfig/ld.so.cache").exists() {
+            let _ = fs::create_dir_all("/var/cache/ldconfig");
+            let _ = std::os::unix::fs::symlink("/etc/ld.so.cache", "/var/cache/ldconfig/ld.so.cache");
+        }
+    }
+
     // Populate minimal /run/udev/data/c<major>:<minor> tags so libinput recognizes
     // keyboards, mice, touchpads, and QEMU virtio-tablet without running a full udevd daemon.
     let _ = fs::create_dir_all("/run/udev/data");

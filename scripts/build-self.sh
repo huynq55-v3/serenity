@@ -169,6 +169,36 @@ fix_clang_resource_headers() {
     done
 }
 
+fix_ldconfig_and_cache() {
+    if [ ! -x /sbin/ldconfig.real ] && { [ ! -e /sbin/ldconfig ] || grep -q 'ldconfig\.real' /sbin/ldconfig 2>/dev/null; }; then
+        local pv_root="/home/serenity/.local/share/Steam/steamrt64/pv-runtime"
+        local steamrt_ldconfig=""
+        if [ -d "${pv_root}" ]; then
+            steamrt_ldconfig="$(find "${pv_root}" -path '*/files/sbin/ldconfig' -type f -executable 2>/dev/null | sort -V | tail -n 1 || true)"
+        fi
+        if [ -n "${steamrt_ldconfig}" ] && [ -x "${steamrt_ldconfig}" ]; then
+            echo "[self-build] Installing real static-PIE ldconfig from SteamRT into /sbin/ldconfig..."
+            atomic_install 0755 "${steamrt_ldconfig}" /sbin/ldconfig
+            as_root mkdir -p /sbin /usr/sbin
+            as_root ln -sfn /sbin/ldconfig /sbin/ldconfig.real
+            as_root ln -sfn /sbin/ldconfig /usr/sbin/ldconfig
+            as_root ln -sfn /sbin/ldconfig /usr/sbin/ldconfig.real
+        fi
+    fi
+
+    if [ -x /sbin/ldconfig ] && ! grep -q 'ldconfig\.real' /sbin/ldconfig 2>/dev/null; then
+        echo "[self-build] Updating /etc/ld.so.cache and /var/cache/ldconfig/ld.so.cache..."
+        as_root /sbin/ldconfig -X 2>/dev/null || true
+    elif [ -x /sbin/ldconfig.real ]; then
+        as_root /sbin/ldconfig -X 2>/dev/null || true
+    fi
+
+    if [ -f /etc/ld.so.cache ]; then
+        as_root mkdir -p /var/cache/ldconfig
+        as_root ln -sfn /etc/ld.so.cache /var/cache/ldconfig/ld.so.cache
+    fi
+}
+
 check_host_tools() {
     local missing=()
     for cmd in cargo rustc curl tar xz gzip install cp ln mv awk sed grep find mktemp; do
@@ -458,6 +488,7 @@ EOF
 
     fix_glibc_linker_scripts
     fix_clang_resource_headers
+    fix_ldconfig_and_cache
 }
 
 main() {
@@ -502,6 +533,7 @@ main() {
     # Re-apply DNS & WirePlumber config in case an installed package touched /etc
     write_dns_files_live
     write_wireplumber_config_live
+    fix_ldconfig_and_cache
     if [ -x /usr/bin/serenity-guard ]; then
         as_root /usr/bin/serenity-guard stop >/dev/null 2>&1 || true
         as_root /usr/bin/serenity-guard start || true
