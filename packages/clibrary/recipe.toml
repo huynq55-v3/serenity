@@ -1,6 +1,6 @@
 [package]
 name = "clibrary"
-version = "1.0.6"
+version = "1.0.7"
 arch = "x86_64-gnu"
 description = "Common Linux C/C++ runtime libraries (GTK3 + GSettings + Glycin/gdk-pixbuf + MIME, NSS, NSPR, Cairo, Pango, ATK, X11, ALSA, CUPS, Kerberos, GLib) for Chrome, Antigravity & Electron apps"
 deps = []
@@ -64,6 +64,14 @@ patterns = [
     "libxcb-glx.so*",
     "libxcb-render.so*",
     "libxcb-shm.so*",
+    # Wayland, XKB, GBM & UUID runtime (required by Alacritty, COSMIC apps & Mesa EGL)
+    "libwayland-client.so*",
+    "libwayland-cursor.so*",
+    "libwayland-egl.so*",
+    "libwayland-server.so*",
+    "libxkbcommon.so*",
+    "libgbm.so*",
+    "libuuid.so*",
     # Audio, printing, Kerberos & C++ runtime
     "libasound.so*",
     "libcups.so*",

@@ -3,6 +3,7 @@ mod db;
 mod manifest;
 
 use crate::manifest::InstalledPackage;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
@@ -14,7 +15,7 @@ fn print_usage() {
     println!("  spkg update                   Fetch latest package index");
     println!("  spkg search [query]           Search available packages");
     println!("  spkg info <pkg>               Show package details");
-    println!("  spkg install <pkg...>         Install package(s) and dependencies");
+    println!("  spkg install [--reinstall] <pkg...>  Install, repair, or reinstall package(s)");
     println!("  spkg remove [--force] <pkg..> Remove installed package(s)");
     println!("  spkg list                     List installed packages");
     println!("  spkg unzstd [file]            Decompress zstd stream or file to stdout");
@@ -98,24 +99,52 @@ fn cmd_info(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_install(targets: &[String]) -> Result<(), String> {
+fn cmd_install(args: &[String]) -> Result<(), String> {
+    let mut reinstall = false;
+    let mut targets = Vec::new();
+    for a in args {
+        if a == "--reinstall" || a == "--force" || a == "-f" {
+            reinstall = true;
+        } else {
+            targets.push(a.clone());
+        }
+    }
     if targets.is_empty() {
-        return Err("Usage: spkg install <pkg...>".to_string());
+        return Err("Usage: spkg install [--reinstall] <pkg...>".to_string());
     }
     let index = db::load_index()?;
-    let order = db::resolve_install_order(&index, targets)?;
+    let order = db::resolve_install_order(&index, &targets)?;
 
     for name in order {
         let meta = &index.packages[&name];
         if let Some(existing) = db::load_installed(&name) {
             if existing.version == meta.version {
-                println!("[spkg] {} {} is already installed.", name, existing.version);
-                continue;
+                let missing_count = existing
+                    .files
+                    .iter()
+                    .filter(|f| {
+                        let p = Path::new(f);
+                        !p.exists() && p.symlink_metadata().is_err()
+                    })
+                    .count();
+                if !reinstall && missing_count == 0 {
+                    println!("[spkg] {} {} is already installed.", name, existing.version);
+                    continue;
+                }
+                if missing_count > 0 {
+                    println!(
+                        "[spkg] Repairing {} {} ({} missing file(s))...",
+                        name, existing.version, missing_count
+                    );
+                } else {
+                    println!("[spkg] Reinstalling {} {}...", name, existing.version);
+                }
+            } else {
+                println!(
+                    "[spkg] Upgrading {} ({} -> {})...",
+                    name, existing.version, meta.version
+                );
             }
-            println!(
-                "[spkg] Upgrading {} ({} -> {})...",
-                name, existing.version, meta.version
-            );
         } else {
             println!("[spkg] Installing {} {}...", name, meta.version);
         }
@@ -185,12 +214,14 @@ fn cmd_remove(args: &[String]) -> Result<(), String> {
         return Err("Usage: spkg remove [--force] <pkg...>".to_string());
     }
 
-    for name in targets {
-        let pkg = db::load_installed(&name)
+    let target_set: HashSet<&str> = targets.iter().map(String::as_str).collect();
+
+    for name in &targets {
+        let pkg = db::load_installed(name)
             .ok_or_else(|| format!("package '{}' is not installed", name))?;
 
         if !force {
-            let rdeps = db::find_reverse_deps(&name)?;
+            let rdeps = db::find_reverse_deps(name)?;
             if !rdeps.is_empty() {
                 return Err(format!(
                     "cannot remove '{}': required by {} (use --force to override)",
@@ -200,8 +231,20 @@ fn cmd_remove(args: &[String]) -> Result<(), String> {
             }
         }
 
-        let mut removed = 0;
+        let all_installed = db::list_installed()?;
+        let protected_files: HashSet<String> = all_installed
+            .into_iter()
+            .filter(|(other, _)| other != name && !target_set.contains(other.as_str()))
+            .flat_map(|(_, other_pkg)| other_pkg.files)
+            .collect();
+
+        let mut removed = 0usize;
+        let mut kept_shared = 0usize;
         for file in &pkg.files {
+            if protected_files.contains(file) {
+                kept_shared += 1;
+                continue;
+            }
             let p = Path::new(file);
             if p.exists() || p.symlink_metadata().is_ok() {
                 if let Err(e) = fs::remove_file(p) {
@@ -211,9 +254,21 @@ fn cmd_remove(args: &[String]) -> Result<(), String> {
                 }
             }
         }
-        db::delete_installed(&name)?;
-        println!("[spkg] Removed {} {} ({} file(s) deleted).", pkg.name, pkg.version, removed);
+        db::delete_installed(name)?;
+        if kept_shared > 0 {
+            println!(
+                "[spkg] Removed {} {} ({} file(s) deleted, {} shared file(s) kept).",
+                pkg.name, pkg.version, removed, kept_shared
+            );
+        } else {
+            println!(
+                "[spkg] Removed {} {} ({} file(s) deleted).",
+                pkg.name, pkg.version, removed
+            );
+        }
     }
+    refresh_ldconfig_cache();
+    let _ = std::process::Command::new("/bin/sync").status();
     Ok(())
 }
 
