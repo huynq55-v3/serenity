@@ -3,7 +3,7 @@ mod db;
 mod manifest;
 
 use crate::manifest::InstalledPackage;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
@@ -154,7 +154,7 @@ fn cmd_install(args: &[String]) -> Result<(), String> {
         println!("  -> Downloaded {} KiB, verifying SHA-256...", bytes.len() / 1024);
         archive::verify_checksum(&bytes, &meta.sha256)?;
 
-        let files = archive::extract_package(&bytes, meta)?;
+        let files = archive::extract_package(&bytes, &name, meta)?;
         let record = InstalledPackage {
             name: name.clone(),
             version: meta.version.clone(),
@@ -200,6 +200,34 @@ fn refresh_ldconfig_cache() {
     }
 }
 
+fn lib_path_alias(path: &str) -> Option<String> {
+    if let Some(rest) = path.strip_prefix("/lib/x86_64-linux-gnu/") {
+        return Some(format!("/usr/lib/x86_64-linux-gnu/{}", rest));
+    }
+    path.strip_prefix("/usr/lib/x86_64-linux-gnu/")
+        .map(|rest| format!("/lib/x86_64-linux-gnu/{}", rest))
+}
+
+fn collect_protected_files(
+    installed: BTreeMap<String, InstalledPackage>,
+    removing_name: &str,
+    target_set: &HashSet<&str>,
+) -> HashSet<String> {
+    let mut protected = HashSet::new();
+    for (other, other_pkg) in installed {
+        if other == removing_name || target_set.contains(other.as_str()) {
+            continue;
+        }
+        for file in other_pkg.files {
+            if let Some(alias) = lib_path_alias(&file) {
+                protected.insert(alias);
+            }
+            protected.insert(file);
+        }
+    }
+    protected
+}
+
 fn cmd_remove(args: &[String]) -> Result<(), String> {
     let mut force = false;
     let mut targets = Vec::new();
@@ -232,20 +260,19 @@ fn cmd_remove(args: &[String]) -> Result<(), String> {
         }
 
         let all_installed = db::list_installed()?;
-        let protected_files: HashSet<String> = all_installed
-            .into_iter()
-            .filter(|(other, _)| other != name && !target_set.contains(other.as_str()))
-            .flat_map(|(_, other_pkg)| other_pkg.files)
-            .collect();
+        let protected_files = collect_protected_files(all_installed, name, &target_set);
 
+        let is_core_lib_pkg = matches!(name.as_str(), "clibrary" | "lib32" | "serenity-base");
         let mut removed = 0usize;
         let mut kept_shared = 0usize;
         for file in &pkg.files {
-            if protected_files.contains(file) {
+            let p = Path::new(file);
+            if protected_files.contains(file)
+                || (!is_core_lib_pkg && archive::is_system_shared_lib_path(p))
+            {
                 kept_shared += 1;
                 continue;
             }
-            let p = Path::new(file);
             if p.exists() || p.symlink_metadata().is_ok() {
                 if let Err(e) = fs::remove_file(p) {
                     eprintln!("[spkg] warn: failed to remove {}: {}", file, e);
@@ -339,5 +366,40 @@ fn main() -> ExitCode {
             eprintln!("[spkg] error: {}", e);
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_protected_files_normalizes_lib_dirs() {
+        let mut installed = BTreeMap::new();
+        installed.insert(
+            "clibrary".to_string(),
+            InstalledPackage {
+                name: "clibrary".to_string(),
+                version: "1.0.7".to_string(),
+                deps: vec![],
+                files: vec!["/usr/lib/x86_64-linux-gnu/libwayland-egl.so.1".to_string()],
+            },
+        );
+        installed.insert(
+            "serenity-base".to_string(),
+            InstalledPackage {
+                name: "serenity-base".to_string(),
+                version: "0.1.2".to_string(),
+                deps: vec![],
+                files: vec!["/lib/x86_64-linux-gnu/libGL.so.1".to_string()],
+            },
+        );
+        let targets: HashSet<&str> = ["app-a"].into_iter().collect();
+        let protected = collect_protected_files(installed, "app-a", &targets);
+
+        assert!(protected.contains("/usr/lib/x86_64-linux-gnu/libwayland-egl.so.1"));
+        assert!(protected.contains("/lib/x86_64-linux-gnu/libwayland-egl.so.1"));
+        assert!(protected.contains("/lib/x86_64-linux-gnu/libGL.so.1"));
+        assert!(protected.contains("/usr/lib/x86_64-linux-gnu/libGL.so.1"));
     }
 }

@@ -66,7 +66,44 @@ fn sanitize_rel_path(path: &Path) -> Result<PathBuf, String> {
     Ok(clean)
 }
 
-fn extract_tar<R: Read>(reader: R, meta: &PackageMeta) -> Result<Vec<String>, String> {
+const SYSTEM_LIB_DIRS: &[&str] = &[
+    "/usr/lib/x86_64-linux-gnu",
+    "/lib/x86_64-linux-gnu",
+    "/usr/lib/i386-linux-gnu",
+    "/lib/i386-linux-gnu",
+    "/lib64",
+];
+
+const SYSTEM_LIB_INSTALLERS: &[&str] = &[
+    "clibrary",
+    "lib32",
+    "serenity-base",
+    "rust",
+    "pipewire",
+];
+
+/// Returns true if `path` is a system shared library (or dynamic loader) directly inside
+/// a standard library directory such as `/usr/lib/x86_64-linux-gnu`.
+pub fn is_system_shared_lib_path(path: &Path) -> bool {
+    let Some(parent) = path.parent().and_then(|p| p.to_str()) else {
+        return false;
+    };
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if !name.starts_with("lib") && !name.starts_with("ld-") {
+        return false;
+    }
+    SYSTEM_LIB_DIRS.contains(&parent)
+}
+
+/// Returns true when a non-library package (`pkg_name`) is touching a system shared library path
+/// so `spkg` will not overwrite existing SONAME symlinks or claim ownership of shared libs.
+fn is_system_shared_lib(path: &Path, pkg_name: &str) -> bool {
+    !SYSTEM_LIB_INSTALLERS.contains(&pkg_name) && is_system_shared_lib_path(path)
+}
+
+fn extract_tar<R: Read>(reader: R, pkg_name: &str, meta: &PackageMeta) -> Result<Vec<String>, String> {
     let mut archive = Archive::new(reader);
     let mut installed_files = Vec::new();
 
@@ -121,6 +158,9 @@ fn extract_tar<R: Read>(reader: R, meta: &PackageMeta) -> Result<Vec<String>, St
                 fs::create_dir_all(&dest)
                     .map_err(|e| format!("mkdir {} failed: {}", dest.display(), e))?;
             } else if entry_type.is_file() || entry_type.is_symlink() {
+                if is_system_shared_lib(&dest, pkg_name) && dest.exists() {
+                    continue;
+                }
                 if let Some(parent) = dest.parent() {
                     fs::create_dir_all(parent)
                         .map_err(|e| format!("mkdir {} failed: {}", parent.display(), e))?;
@@ -156,24 +196,52 @@ fn extract_tar<R: Read>(reader: R, meta: &PackageMeta) -> Result<Vec<String>, St
     Ok(installed_files)
 }
 
-pub fn extract_package(bytes: &[u8], meta: &PackageMeta) -> Result<Vec<String>, String> {
+pub fn extract_package(bytes: &[u8], pkg_name: &str, meta: &PackageMeta) -> Result<Vec<String>, String> {
     let url_lower = meta.url.to_ascii_lowercase();
     if url_lower.ends_with(".tar.zst") || url_lower.ends_with(".tzst") {
         let cursor = Cursor::new(bytes);
         let decoder = StreamingDecoder::new(cursor)
             .map_err(|e| format!("zstd decode init failed: {}", e))?;
-        extract_tar(decoder, meta)
+        extract_tar(decoder, pkg_name, meta)
     } else if url_lower.ends_with(".tar.gz")
         || url_lower.ends_with(".tgz")
         || url_lower.ends_with(".apk")
     {
         let cursor = Cursor::new(bytes);
         let decoder = GzDecoder::new(cursor);
-        extract_tar(decoder, meta)
+        extract_tar(decoder, pkg_name, meta)
     } else {
         Err(format!(
             "unsupported archive format for '{}' (expected .tar.zst, .tar.gz, or .apk)",
             meta.url
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_system_shared_lib_detection() {
+        let wayland_egl = Path::new("/usr/lib/x86_64-linux-gnu/libwayland-egl.so.1");
+        let ld_so = Path::new("/lib64/ld-linux-x86-64.so.2");
+        let lib32 = Path::new("/usr/lib/i386-linux-gnu/libGL.so.1");
+        let bin = Path::new("/usr/bin/git");
+        let app_subdir = Path::new("/usr/lib/x86_64-linux-gnu/nvm/libfoo.so");
+
+        assert!(is_system_shared_lib_path(wayland_egl));
+        assert!(is_system_shared_lib_path(ld_so));
+        assert!(is_system_shared_lib_path(lib32));
+        assert!(!is_system_shared_lib_path(bin));
+        assert!(!is_system_shared_lib_path(app_subdir));
+
+        assert!(is_system_shared_lib(wayland_egl, "steam"));
+        assert!(is_system_shared_lib(wayland_egl, "git"));
+        assert!(!is_system_shared_lib(wayland_egl, "clibrary"));
+        assert!(!is_system_shared_lib(wayland_egl, "serenity-base"));
+        assert!(!is_system_shared_lib(wayland_egl, "pipewire"));
+        assert!(!is_system_shared_lib(wayland_egl, "rust"));
+        assert!(!is_system_shared_lib(lib32, "lib32"));
     }
 }
