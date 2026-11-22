@@ -84,7 +84,7 @@ fi
 
 LDCONFIG_SRC=""
 for cand in /sbin/ldconfig.real /usr/sbin/ldconfig.real /sbin/ldconfig /usr/sbin/ldconfig; do
-    if [ -x "${cand}" ] && ! grep -q 'ldconfig\.real' "${cand}" 2>/dev/null; then
+    if [ -x "${cand}" ] && ! grep -Fq 'ldconfig.real' "${cand}" 2>/dev/null; then
         LDCONFIG_SRC="${cand}"
         break
     fi
