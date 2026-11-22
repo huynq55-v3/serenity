@@ -1,6 +1,6 @@
 [package]
 name = "cosmic-files"
-version = "0.1.0"
+version = "0.1.1"
 arch = "x86_64-gnu"
 description = "COSMIC Files native Wayland file manager (Rust + libcosmic) and xdg-open helper"
 deps = ["clibrary"]
@@ -46,6 +46,14 @@ case "$TARGET" in
         ;;
     file://*)
         TARGET="${TARGET#file://}"
+        ;;
+esac
+
+case "$TARGET" in
+    *.png|*.PNG|*.jpg|*.JPG|*.jpeg|*.JPEG|*.webp|*.WEBP|*.gif|*.GIF|*.bmp|*.BMP|*.svg|*.SVG|*.tif|*.TIF|*.tiff|*.TIFF|*.ico|*.ICO)
+        if [ -x /usr/bin/eog ]; then
+            exec /usr/bin/eog "$TARGET"
+        fi
         ;;
 esac
 

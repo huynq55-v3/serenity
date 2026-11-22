@@ -1,0 +1,109 @@
+[package]
+name = "eog"
+version = "45.3"
+arch = "x86_64-gnu"
+description = "Eye of GNOME image viewer (Wayland native photo viewer for PNG/JPG/WebP/GIF/SVG)"
+deps = ["clibrary"]
+
+[source]
+type = "custom"
+script = """
+mkdir -p "${STAGE_DIR}/usr/lib/eog/bin" "${STAGE_DIR}/usr/lib/eog/lib"
+mkdir -p "${STAGE_DIR}/usr/bin" "${STAGE_DIR}/usr/share/icons/hicolor"
+
+EOG_BIN="$(command -v eog || true)"
+if [ -z "${EOG_BIN}" ] || [ ! -x "${EOG_BIN}" ]; then
+    echo "ERROR: eog binary not found on build host" >&2
+    exit 1
+fi
+cp -L "${EOG_BIN}" "${STAGE_DIR}/usr/lib/eog/bin/eog"
+chmod 0755 "${STAGE_DIR}/usr/lib/eog/bin/eog"
+
+if [ -d /usr/lib/x86_64-linux-gnu/eog ]; then
+    mkdir -p "${STAGE_DIR}/usr/lib/x86_64-linux-gnu"
+    cp -a /usr/lib/x86_64-linux-gnu/eog "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/"
+fi
+
+if [ -d /usr/share/eog ]; then
+    mkdir -p "${STAGE_DIR}/usr/share"
+    cp -a /usr/share/eog "${STAGE_DIR}/usr/share/"
+fi
+
+if [ -d /usr/share/icons/hicolor ]; then
+    (cd /usr/share/icons/hicolor && find . -iname 'org.gnome.eog*' -exec cp -a --parents -t "${STAGE_DIR}/usr/share/icons/hicolor" {} +)
+fi
+
+SCHEMA_DIR="${STAGE_DIR}/usr/share/eog/glib-2.0/schemas"
+mkdir -p "${SCHEMA_DIR}"
+for pat in "org.gnome.eog*" "org.gnome.desktop*" "*enums.xml"; do
+    for sfile in /usr/share/glib-2.0/schemas/${pat}; do
+        [ -f "${sfile}" ] && cp -f "${sfile}" "${SCHEMA_DIR}/"
+    done
+done
+glib-compile-schemas "${SCHEMA_DIR}"
+test -f "${SCHEMA_DIR}/gschemas.compiled"
+
+# Bundle non-glibc shared libraries privately into /usr/lib/eog/lib
+python3 - "${STAGE_DIR}/usr/lib/eog/bin" "${STAGE_DIR}/usr/lib/eog/lib" "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/eog" <<'PY'
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+bin_dir = Path(sys.argv[1])
+lib_dir = Path(sys.argv[2])
+plugin_dir = Path(sys.argv[3])
+lib_dir.mkdir(parents=True, exist_ok=True)
+skip = ("ld-linux-", "libc.so", "libm.so", "libdl.so", "libpthread.so", "librt.so")
+
+seen = set()
+queue = [p for p in sorted(bin_dir.iterdir()) if p.is_file()]
+if plugin_dir.is_dir():
+    queue += [p for p in sorted(plugin_dir.rglob("*.so*")) if p.is_file()]
+
+while queue:
+    cur = queue.pop(0)
+    proc = subprocess.run(["ldd", str(cur)], capture_output=True, text=True)
+    for line in proc.stdout.splitlines():
+        for tok in line.split():
+            if tok.startswith("/") and (tok.startswith("/usr/lib") or tok.startswith("/lib")):
+                dep = Path(tok)
+                name = dep.name
+                if name.startswith(skip) or name in seen or not dep.exists():
+                    continue
+                seen.add(name)
+                dst = lib_dir / name
+                shutil.copy2(dep.resolve(), dst)
+                os.chmod(dst, 0o644)
+                queue.append(dst)
+
+print(f"  -> Bundled {len(seen)} shared libraries into {lib_dir}")
+PY
+
+ln -sfn /usr/bin/eog "${STAGE_DIR}/usr/bin/photo-viewer"
+"""
+
+[install.scripts]
+"usr/bin/eog" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/eog/lib:/usr/lib/x86_64-linux-gnu/eog${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export GDK_BACKEND="wayland"
+export GSETTINGS_SCHEMA_DIR="/usr/share/eog/glib-2.0/schemas:/usr/share/glib-2.0/schemas"
+exec /usr/lib/eog/bin/eog "$@"
+"""
+
+[install.inline]
+"usr/share/applications/org.gnome.eog.desktop" = """[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Image Viewer
+GenericName=Image Viewer
+Comment=Browse and rotate images
+Exec=/usr/bin/eog %U
+Icon=org.gnome.eog
+Terminal=false
+StartupNotify=true
+StartupWMClass=eog
+Categories=Graphics;2DGraphics;RasterGraphics;Viewer;
+MimeType=image/bmp;image/gif;image/jpeg;image/jpg;image/png;image/tiff;image/webp;image/svg+xml;image/x-ico;
+"""

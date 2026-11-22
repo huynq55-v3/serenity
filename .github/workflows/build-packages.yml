@@ -199,6 +199,14 @@ jobs:
                   zstd binutils curl ca-certificates iproute2 nftables \
                   libpcap0.8 libtss2-esys-3.0.2-0t64 libtss2-tctildr0t64 \
                   libnss3-tools lsof util-linux net-tools libcap2-bin
+              elif [ "${{ matrix.package }}" = "eog" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends \
+                  zstd eog libgtk-3-0t64 gsettings-desktop-schemas webp-pixbuf-loader librsvg2-common libglib2.0-bin
+              elif [ "${{ matrix.package }}" = "guvcview" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends \
+                  zstd guvcview v4l-utils libgtk-3-0t64 libsdl2-2.0-0 libv4l-0t64
               else
                 command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
               fi

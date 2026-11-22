@@ -662,6 +662,7 @@ fn setup_desktop_permissions() {
     }
 
     kmod::setup_sound_devices();
+    kmod::setup_video_devices();
 
     // Grant video group (gid 44) write access to /sys/class/backlight/*/brightness as fallback
     // and tag backlight devices in /run/udev/data/+backlight:<name> so libudev / cosmic-settings-daemon

@@ -1,0 +1,128 @@
+[package]
+name = "guvcview"
+version = "2.0.8"
+arch = "x86_64-gnu"
+description = "GTK+ UVC Viewer webcam capture app (take photos and record video via V4L2)"
+deps = ["clibrary", "pipewire"]
+
+[source]
+type = "custom"
+script = """
+mkdir -p "${STAGE_DIR}/usr/lib/guvcview/bin" "${STAGE_DIR}/usr/lib/guvcview/lib"
+mkdir -p "${STAGE_DIR}/usr/bin" "${STAGE_DIR}/usr/share/icons/hicolor/128x128/apps"
+
+GUVC_BIN="$(command -v guvcview || true)"
+if [ -z "${GUVC_BIN}" ] || [ ! -x "${GUVC_BIN}" ]; then
+    echo "ERROR: guvcview binary not found on build host" >&2
+    exit 1
+fi
+cp -L "${GUVC_BIN}" "${STAGE_DIR}/usr/lib/guvcview/bin/guvcview"
+chmod 0755 "${STAGE_DIR}/usr/lib/guvcview/bin/guvcview"
+
+V4L2_BIN="$(command -v v4l2-ctl || true)"
+if [ -n "${V4L2_BIN}" ] && [ -x "${V4L2_BIN}" ]; then
+    cp -L "${V4L2_BIN}" "${STAGE_DIR}/usr/lib/guvcview/bin/v4l2-ctl"
+    chmod 0755 "${STAGE_DIR}/usr/lib/guvcview/bin/v4l2-ctl"
+fi
+
+if [ -d /usr/share/guvcview ]; then
+    mkdir -p "${STAGE_DIR}/usr/share"
+    cp -a /usr/share/guvcview "${STAGE_DIR}/usr/share/"
+fi
+
+if [ -f /usr/share/pixmaps/guvcview.png ]; then
+    mkdir -p "${STAGE_DIR}/usr/share/pixmaps"
+    cp -L /usr/share/pixmaps/guvcview.png "${STAGE_DIR}/usr/share/pixmaps/guvcview.png"
+    cp -L /usr/share/pixmaps/guvcview.png "${STAGE_DIR}/usr/share/icons/hicolor/128x128/apps/guvcview.png"
+elif [ -f /usr/share/pixmaps/guvcview/guvcview.png ]; then
+    cp -L /usr/share/pixmaps/guvcview/guvcview.png "${STAGE_DIR}/usr/share/icons/hicolor/128x128/apps/guvcview.png"
+fi
+
+# Bundle non-glibc shared libraries (including libgview* and SDL2/V4L2) into /usr/lib/guvcview/lib
+python3 - "${STAGE_DIR}/usr/lib/guvcview/bin" "${STAGE_DIR}/usr/lib/guvcview/lib" <<'PY'
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+bin_dir = Path(sys.argv[1])
+lib_dir = Path(sys.argv[2])
+lib_dir.mkdir(parents=True, exist_ok=True)
+skip = ("ld-linux-", "libc.so", "libm.so", "libdl.so", "libpthread.so", "librt.so")
+
+seen = set()
+queue = []
+
+for p in sorted(bin_dir.iterdir()):
+    if p.is_file():
+        queue.append(p)
+
+sys_libdir = Path("/usr/lib/x86_64-linux-gnu")
+if sys_libdir.is_dir():
+    for gview in sorted(sys_libdir.glob("libgview*.so*")):
+        if gview.exists() and gview.name not in seen:
+            seen.add(gview.name)
+            dst = lib_dir / gview.name
+            shutil.copy2(gview.resolve(), dst)
+            os.chmod(dst, 0o644)
+            queue.append(dst)
+
+while queue:
+    cur = queue.pop(0)
+    proc = subprocess.run(["ldd", str(cur)], capture_output=True, text=True)
+    for line in proc.stdout.splitlines():
+        for tok in line.split():
+            if tok.startswith("/") and (tok.startswith("/usr/lib") or tok.startswith("/lib")):
+                dep = Path(tok)
+                name = dep.name
+                if name.startswith(skip) or name in seen or not dep.exists():
+                    continue
+                seen.add(name)
+                dst = lib_dir / name
+                shutil.copy2(dep.resolve(), dst)
+                os.chmod(dst, 0o644)
+                queue.append(dst)
+
+print(f"  -> Bundled {len(seen)} shared libraries into {lib_dir}")
+PY
+
+ln -sfn /usr/bin/guvcview "${STAGE_DIR}/usr/bin/camera"
+"""
+
+[install.scripts]
+"usr/bin/guvcview" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/guvcview/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export GDK_BACKEND="wayland"
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-wayland}"
+fi
+mkdir -p "${HOME}/Pictures"
+if [ "$#" -eq 0 ]; then
+    cd "${HOME}/Pictures" || true
+fi
+if [ -e /dev/video0 ] && [ ! -r /dev/video0 ]; then
+    echo "[guvcview] Warning: /dev/video0 is not readable; run: sudo chgrp video /dev/video* && sudo chmod 0660 /dev/video*" >&2
+fi
+exec /usr/lib/guvcview/bin/guvcview "$@"
+"""
+
+"usr/bin/v4l2-ctl" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/guvcview/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/guvcview/bin/v4l2-ctl "$@"
+"""
+
+[install.inline]
+"usr/share/applications/guvcview.desktop" = """[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Camera (GUVCView)
+GenericName=Webcam Photo & Video Capture
+Comment=Capture photos and video from your webcam
+Exec=/usr/bin/guvcview
+Icon=guvcview
+Terminal=false
+StartupNotify=true
+StartupWMClass=guvcview
+Categories=AudioVideo;Video;Photography;
+"""

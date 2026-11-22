@@ -27,6 +27,7 @@ const MODPROBE: &str = "/sbin/modprobe";
 const COLDPLUG_PASSES: usize = 4;
 const MODPROBE_BATCH: usize = 256;
 const AUDIO_GID: libc::gid_t = 29;
+const VIDEO_GID: libc::gid_t = 44;
 
 pub fn kernel_release() -> String {
     unsafe {
@@ -183,6 +184,14 @@ fn modalias_of_add_event(buf: &[u8]) -> Option<String> {
     }
 }
 
+struct DeviceUevent {
+    subsystem: String,
+    devname: Option<String>,
+    devpath: Option<String>,
+    major: Option<String>,
+    minor: Option<String>,
+}
+
 struct SoundEvent {
     devname: Option<String>,
     devpath: Option<String>,
@@ -190,10 +199,17 @@ struct SoundEvent {
     minor: Option<String>,
 }
 
-fn chown_chmod_audio(path: &Path) {
+struct VideoEvent {
+    is_video4linux: bool,
+    devname: Option<String>,
+    major: Option<String>,
+    minor: Option<String>,
+}
+
+fn chown_chmod_device(path: &Path, gid: libc::gid_t) {
     if let Ok(c_path) = CString::new(path.to_string_lossy().as_bytes()) {
         unsafe {
-            libc::chown(c_path.as_ptr(), 0, AUDIO_GID);
+            libc::chown(c_path.as_ptr(), 0, gid);
             libc::chmod(c_path.as_ptr(), 0o660);
         }
     }
@@ -208,6 +224,15 @@ fn write_sound_udev_tag(udev_file: &str, name_str: &str) {
     let _ = fs::write(format!("/run/udev/data/{}", udev_file), udev_data);
 }
 
+fn write_video_udev_tag(udev_file: &str, name_str: &str) {
+    let _ = fs::create_dir_all("/run/udev/data");
+    let udev_data = format!(
+        "E:ID_V4L_VERSION=2\nE:ID_V4L_CAPABILITIES=:capture:\nE:ID_SEAT=seat0\nE:ID_FOR_SEAT=video4linux-{}\nG:seat\n",
+        name_str
+    );
+    let _ = fs::write(format!("/run/udev/data/{}", udev_file), udev_data);
+}
+
 /// Grants `audio` group access on `/dev/snd/*` and writes `/run/udev/data` tags so
 /// PipeWire/WirePlumber (`spa/alsa-udev` checks `SOUND_INITIALIZED=1`) discovers cards without udevd.
 pub fn setup_sound_devices() {
@@ -216,7 +241,7 @@ pub fn setup_sound_devices() {
             if entry.path().is_dir() {
                 continue;
             }
-            chown_chmod_audio(&entry.path());
+            chown_chmod_device(&entry.path(), AUDIO_GID);
         }
     }
 
@@ -238,8 +263,40 @@ pub fn setup_sound_devices() {
     }
 }
 
-fn parse_sound_event(buf: &[u8]) -> Option<SoundEvent> {
-    let mut is_sound = false;
+/// Grants `video` group access on `/dev/video*` / `/dev/media*` and writes `/run/udev/data`
+/// V4L2 tags so PipeWire / libudev / webcam apps discover cameras without udevd.
+pub fn setup_video_devices() {
+    if let Ok(entries) = fs::read_dir("/dev") {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else { continue };
+            if name_str.starts_with("video") || name_str.starts_with("media") {
+                chown_chmod_device(&entry.path(), VIDEO_GID);
+            }
+        }
+    }
+
+    if let Ok(entries) = fs::read_dir("/sys/class/video4linux") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else { continue };
+            if name_str.starts_with("video") {
+                if let Ok(dev_num) = fs::read_to_string(entry.path().join("dev")) {
+                    let dev_num = dev_num.trim();
+                    if !dev_num.is_empty() {
+                        write_video_udev_tag(&format!("c{}", dev_num), name_str);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn parse_uevent(buf: &[u8], allowed_subsystems: &[&[u8]]) -> Option<DeviceUevent> {
+    let mut subsystem: Option<String> = None;
     let mut action_ok = false;
     let mut devname = None;
     let mut devpath = None;
@@ -247,8 +304,10 @@ fn parse_sound_event(buf: &[u8]) -> Option<SoundEvent> {
     let mut minor = None;
 
     for field in buf.split(|b| *b == 0) {
-        if field == b"SUBSYSTEM=sound" {
-            is_sound = true;
+        if let Some(sub) = field.strip_prefix(b"SUBSYSTEM=") {
+            if allowed_subsystems.iter().any(|s| *s == sub) {
+                subsystem = Some(String::from_utf8_lossy(sub).into_owned());
+            }
         } else if field == b"ACTION=add" || field == b"ACTION=change" {
             action_ok = true;
         } else if let Some(v) = field.strip_prefix(b"DEVNAME=") {
@@ -274,8 +333,10 @@ fn parse_sound_event(buf: &[u8]) -> Option<SoundEvent> {
         }
     }
 
-    if is_sound && action_ok {
-        Some(SoundEvent {
+    let subsystem = subsystem?;
+    if action_ok {
+        Some(DeviceUevent {
+            subsystem,
             devname,
             devpath,
             major,
@@ -286,11 +347,31 @@ fn parse_sound_event(buf: &[u8]) -> Option<SoundEvent> {
     }
 }
 
+fn parse_sound_event(buf: &[u8]) -> Option<SoundEvent> {
+    let ev = parse_uevent(buf, &[b"sound"])?;
+    Some(SoundEvent {
+        devname: ev.devname,
+        devpath: ev.devpath,
+        major: ev.major,
+        minor: ev.minor,
+    })
+}
+
+fn parse_video_event(buf: &[u8]) -> Option<VideoEvent> {
+    let ev = parse_uevent(buf, &[b"video4linux", b"media"])?;
+    Some(VideoEvent {
+        is_video4linux: ev.subsystem == "video4linux",
+        devname: ev.devname,
+        major: ev.major,
+        minor: ev.minor,
+    })
+}
+
 fn handle_sound_event(ev: &SoundEvent) {
     if let Some(devname) = ev.devname.as_deref() {
         let rel = devname.trim_start_matches('/');
         if !rel.is_empty() {
-            chown_chmod_audio(&Path::new("/dev").join(rel));
+            chown_chmod_device(&Path::new("/dev").join(rel), AUDIO_GID);
         }
         let base = Path::new(rel)
             .file_name()
@@ -306,6 +387,24 @@ fn handle_sound_event(ev: &SoundEvent) {
         if let Some(base) = devpath.trim_end_matches('/').rsplit('/').next() {
             if base.starts_with("card") {
                 write_sound_udev_tag(&format!("+sound:{}", base), base);
+            }
+        }
+    }
+}
+
+fn handle_video_event(ev: &VideoEvent) {
+    if let Some(devname) = ev.devname.as_deref() {
+        let rel = devname.trim_start_matches('/');
+        if !rel.is_empty() {
+            chown_chmod_device(&Path::new("/dev").join(rel), VIDEO_GID);
+        }
+        let base = Path::new(rel)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if ev.is_video4linux && base.starts_with("video") {
+            if let (Some(maj), Some(min)) = (ev.major.as_deref(), ev.minor.as_deref()) {
+                write_video_udev_tag(&format!("c{}:{}", maj, min), base);
             }
         }
     }
@@ -342,6 +441,7 @@ fn hotplug_loop(fd: RawFd, _keep_alive: OwnedFd) {
                             .spawn();
                     }
                     setup_sound_devices();
+                    setup_video_devices();
                     continue;
                 }
                 _ => {
@@ -360,6 +460,9 @@ fn hotplug_loop(fd: RawFd, _keep_alive: OwnedFd) {
         }
         if let Some(ev) = parse_sound_event(&buf[..n as usize]) {
             handle_sound_event(&ev);
+        }
+        if let Some(ev) = parse_video_event(&buf[..n as usize]) {
+            handle_video_event(&ev);
         }
     }
 }
@@ -530,5 +633,29 @@ mod tests {
 
         let input = b"add@/devices/x/input/event0\0ACTION=add\0SUBSYSTEM=input\0DEVNAME=input/event0\0";
         assert!(parse_sound_event(input).is_none());
+    }
+
+    #[test]
+    fn parses_video_and_media_add_events() {
+        let vid = b"add@/devices/pci0000:00/usb3/3-3/3-3:1.0/video4linux/video0\0ACTION=add\0SUBSYSTEM=video4linux\0MAJOR=81\0MINOR=0\0DEVNAME=video0\0";
+        let ev = parse_video_event(vid).expect("video0 add event");
+        assert!(ev.is_video4linux);
+        assert_eq!(ev.devname.as_deref(), Some("video0"));
+        assert_eq!(ev.major.as_deref(), Some("81"));
+        assert_eq!(ev.minor.as_deref(), Some("0"));
+
+        let media = b"change@/devices/pci0000:00/usb3/3-3/3-3:1.0/media0\0ACTION=change\0SUBSYSTEM=media\0MAJOR=240\0MINOR=0\0DEVNAME=media0\0";
+        let ev = parse_video_event(media).expect("media0 change event");
+        assert!(!ev.is_video4linux);
+        assert_eq!(ev.devname.as_deref(), Some("media0"));
+    }
+
+    #[test]
+    fn ignores_video_remove_and_unrelated_subsystems() {
+        let rem = b"remove@/devices/x/video4linux/video0\0ACTION=remove\0SUBSYSTEM=video4linux\0DEVNAME=video0\0";
+        assert!(parse_video_event(rem).is_none());
+
+        let sound = b"add@/devices/x/sound/card0\0ACTION=add\0SUBSYSTEM=sound\0DEVNAME=snd/controlC0\0";
+        assert!(parse_video_event(sound).is_none());
     }
 }
