@@ -10,6 +10,8 @@ pub const WATCHED_FILES: &[&str] = &[
     "/usr/bin/spkg",
     "/usr/bin/serenity-fw",
     "/usr/bin/serenity-guard",
+    "/usr/bin/git",
+    "/usr/bin/ssh",
     "/etc/passwd",
     "/etc/shadow",
     "/etc/group",
@@ -583,20 +585,48 @@ fn is_git_bin(exe: &str) -> bool {
     exe == "/usr/bin/git" || exe.starts_with("/usr/lib/git-core/")
 }
 
+/// Only `/usr/bin/ssh` spawned as a descendant of `/usr/bin/git` is permitted to open
+/// SSH private keys. Direct opens by `/usr/bin/git` itself (e.g. `git diff --no-index`)
+/// or standalone `ssh` / `cat` / spoofed binaries are denied.
 pub fn is_git_authorized_opener(exe: &str, ancestor_exes: &[String]) -> bool {
-    if is_git_bin(exe) {
-        return true;
-    }
     if exe == "/usr/bin/ssh" || exe == "/bin/ssh" {
         return ancestor_exes.iter().any(|a| is_git_bin(a));
     }
     false
 }
 
-pub fn check_pid_git_authorized(pid: i32) -> (bool, String, String, String) {
+pub fn has_dangerous_env(pid: i32) -> bool {
+    let Ok(bytes) = fs::read(format!("/proc/{}/environ", pid)) else {
+        return false;
+    };
+    const DANGEROUS_PREFIXES: &[&str] = &[
+        "LD_PRELOAD=",
+        "LD_LIBRARY_PATH=",
+        "LD_AUDIT=",
+        "GIT_SSH_COMMAND=",
+        "GIT_SSH=",
+    ];
+    for entry in bytes.split(|&b| b == 0) {
+        if entry.is_empty() {
+            continue;
+        }
+        let s = String::from_utf8_lossy(entry);
+        if DANGEROUS_PREFIXES.iter().any(|p| s.starts_with(p)) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn check_pid_git_authorized(
+    pid: i32,
+    trusted_ssh_sha256: Option<&str>,
+    trusted_git_sha256: Option<&str>,
+) -> (bool, String, String, String) {
     let (mut cur_ppid, _, _, comm, exe, cmdline) = crate::proc_mon::read_proc_meta(pid);
     let exe_clean = exe.trim_end_matches(" (deleted)").to_string();
 
+    let mut ancestor_pids = Vec::new();
     let mut ancestors = Vec::new();
     for _ in 0..8 {
         if cur_ppid <= 1 {
@@ -605,6 +635,7 @@ pub fn check_pid_git_authorized(pid: i32) -> (bool, String, String, String) {
         let (next_ppid, _, _, _, p_exe, _) = crate::proc_mon::read_proc_meta(cur_ppid);
         let p_clean = p_exe.trim_end_matches(" (deleted)").to_string();
         if !p_clean.is_empty() {
+            ancestor_pids.push((cur_ppid, p_clean.clone()));
             ancestors.push(p_clean);
         }
         if next_ppid == cur_ppid {
@@ -613,12 +644,46 @@ pub fn check_pid_git_authorized(pid: i32) -> (bool, String, String, String) {
         cur_ppid = next_ppid;
     }
 
-    let allowed = is_git_authorized_opener(&exe_clean, &ancestors);
-    (allowed, comm, exe, cmdline)
+    if !is_git_authorized_opener(&exe_clean, &ancestors) {
+        return (false, comm, exe, cmdline);
+    }
+
+    // Reject LD_PRELOAD / LD_LIBRARY_PATH / LD_AUDIT / GIT_SSH_COMMAND / GIT_SSH injection
+    if has_dangerous_env(pid) || ancestor_pids.iter().any(|(apid, _)| has_dangerous_env(*apid)) {
+        return (false, comm, exe, cmdline);
+    }
+
+    // Verify running binary SHA-256 matches trusted /usr/bin/ssh (defeats cp /bin/cat /usr/bin/ssh)
+    if let Some(expected_ssh) = trusted_ssh_sha256 {
+        let actual_ssh = sha256_file(Path::new(&format!("/proc/{}/exe", pid)))
+            .map(|(h, _, _)| h)
+            .unwrap_or_default();
+        if actual_ssh != expected_ssh {
+            return (false, comm, exe, cmdline);
+        }
+    }
+
+    // Verify /usr/bin/git ancestor binary SHA-256 matches trusted baseline
+    if let Some(expected_git) = trusted_git_sha256 {
+        for (apid, aexe) in &ancestor_pids {
+            if aexe == "/usr/bin/git" {
+                let actual_git = sha256_file(Path::new(&format!("/proc/{}/exe", apid)))
+                    .map(|(h, _, _)| h)
+                    .unwrap_or_default();
+                if actual_git != expected_git {
+                    return (false, comm, exe, cmdline);
+                }
+            }
+        }
+    }
+
+    (true, comm, exe, cmdline)
 }
 
 pub struct SshKeyGuard {
     fd: i32,
+    trusted_ssh_sha256: Option<String>,
+    trusted_git_sha256: Option<String>,
 }
 
 impl SshKeyGuard {
@@ -684,7 +749,14 @@ impl SshKeyGuard {
             return None;
         }
 
-        Some(Self { fd })
+        let trusted_ssh_sha256 = sha256_file(Path::new("/usr/bin/ssh")).map(|(h, _, _)| h);
+        let trusted_git_sha256 = sha256_file(Path::new("/usr/bin/git")).map(|(h, _, _)| h);
+
+        Some(Self {
+            fd,
+            trusted_ssh_sha256,
+            trusted_git_sha256,
+        })
     }
 
     pub fn wait_next_event(&self) -> Vec<FimAlert> {
@@ -732,7 +804,11 @@ impl SshKeyGuard {
                 let allow = if meta.pid == my_pid || !is_ssh_private_key_path(&target_str) {
                     true
                 } else {
-                    let (ok, comm, exe, cmdline) = check_pid_git_authorized(meta.pid);
+                    let (ok, comm, exe, cmdline) = check_pid_git_authorized(
+                        meta.pid,
+                        self.trusted_ssh_sha256.as_deref(),
+                        self.trusted_git_sha256.as_deref(),
+                    );
                     if !ok && !seen_denied.iter().any(|(p, t)| *p == meta.pid && t == &target_str) {
                         seen_denied.push((meta.pid, target_str.clone()));
                         alerts.push(FimAlert {
@@ -744,7 +820,7 @@ impl SshKeyGuard {
                             actor_pid: Some(meta.pid),
                             actor_exe: Some(exe.clone()),
                             summary: format!(
-                                "BLOCKED unauthorized read of SSH private key '{}' by PID {} ({} [{}], cmd='{}') — only git is permitted!",
+                                "BLOCKED unauthorized read of SSH private key '{}' by PID {} ({} [{}], cmd='{}') — only verified /usr/bin/ssh spawned by /usr/bin/git is permitted!",
                                 target_str, meta.pid, comm, exe, cmdline
                             ),
                         });
@@ -830,11 +906,23 @@ mod tests {
 
     #[test]
     fn test_git_authorized_opener() {
-        assert!(is_git_authorized_opener("/usr/bin/git", &[]));
-        assert!(is_git_authorized_opener("/usr/lib/git-core/git-remote-ssh", &[]));
+        // Direct git process is now denied (prevents `git diff --no-index ~/.ssh/id_ed25519`)
+        assert!(!is_git_authorized_opener("/usr/bin/git", &[]));
+        assert!(!is_git_authorized_opener("/usr/lib/git-core/git-remote-ssh", &[]));
+        // Only /usr/bin/ssh spawned as a descendant of /usr/bin/git is allowed
+        assert!(is_git_authorized_opener(
+            "/usr/bin/ssh",
+            &["/usr/bin/git".to_string()]
+        ));
         assert!(is_git_authorized_opener(
             "/usr/bin/ssh",
             &["/bin/sh".to_string(), "/usr/bin/git".to_string()]
+        ));
+        // Spoofed paths or standalone ssh are denied
+        assert!(!is_git_authorized_opener("/tmp/ssh", &["/usr/bin/git".to_string()]));
+        assert!(!is_git_authorized_opener(
+            "/usr/bin/ssh",
+            &["/tmp/git".to_string()]
         ));
         assert!(!is_git_authorized_opener("/usr/bin/ssh", &["/bin/nu".to_string()]));
         assert!(!is_git_authorized_opener("/bin/cat", &["/bin/bash".to_string()]));
