@@ -1,6 +1,6 @@
 [package]
 name = "guvcview"
-version = "2.0.8"
+version = "2.0.8-r1"
 arch = "x86_64-gnu"
 description = "GTK+ UVC Viewer webcam capture app (take photos and record video via V4L2)"
 deps = ["clibrary", "pipewire"]
@@ -91,6 +91,186 @@ ln -sfn /usr/bin/guvcview "${STAGE_DIR}/usr/bin/camera"
 """
 
 [install.scripts]
+"usr/bin/webcam-ctl" = """#!/bin/sh
+set -eu
+
+lock_devs() {
+    for d in /dev/video* /dev/media*; do
+        [ -e "$d" ] || continue
+        chown 0:0 "$d"
+        chmod 0600 "$d"
+    done
+}
+
+unlock_devs() {
+    for d in /dev/video* /dev/media*; do
+        [ -e "$d" ] || continue
+        chown 0:44 "$d"
+        chmod 0660 "$d"
+    done
+}
+
+has_live_watchers() {
+    [ -d /run/webcam-ctl.pids ] || return 1
+    for pf in /run/webcam-ctl.pids/*; do
+        [ -f "$pf" ] || continue
+        wp="$(basename "$pf")"
+        if [ -d "/proc/$wp" ]; then
+            return 0
+        else
+            rm -f "$pf"
+        fi
+    done
+    return 1
+}
+
+list_holders() {
+    for fd in /proc/[0-9]*/fd/*; do
+        [ -L "$fd" ] || continue
+        target="$(readlink "$fd" 2>/dev/null || true)"
+        case "$target" in
+            /dev/video*|/dev/media*)
+                pdir="${fd%/fd/*}"
+                hp="${pdir##*/}"
+                hcomm="$(cat "/proc/$hp/comm" 2>/dev/null || true)"
+                echo "${hp}:${hcomm}:${target}"
+                ;;
+        esac
+    done | sort -u
+}
+
+require_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "webcam-ctl: root required; run: sudo webcam-ctl $*" >&2
+        exit 1
+    fi
+}
+
+cmd_status() {
+    has_dev=0
+    unlocked=0
+    for d in /dev/video*; do
+        [ -e "$d" ] || continue
+        has_dev=1
+        if [ -r "$d" ] && [ -w "$d" ]; then
+            unlocked=1
+        fi
+    done
+
+    if [ "$has_dev" -eq 0 ]; then
+        echo "Webcam status: NO DEVICE (/dev/video* not found)"
+    elif [ "$unlocked" -eq 1 ]; then
+        if [ -f /run/webcam-ctl.manual ]; then
+            echo "Webcam status: UNLOCKED (ON - manual mode)"
+        else
+            echo "Webcam status: UNLOCKED (ON - per-app session)"
+        fi
+    else
+        echo "Webcam status: LOCKED (OFF - 0600 root:root)"
+    fi
+
+    if [ -d /run/webcam-ctl.pids ]; then
+        for pf in /run/webcam-ctl.pids/*; do
+            [ -f "$pf" ] || continue
+            wp="$(basename "$pf")"
+            if [ -d "/proc/$wp" ]; then
+                wcomm="$(cat "/proc/$wp/comm" 2>/dev/null || true)"
+                echo "  watched pid $wp ($wcomm)"
+            fi
+        done
+    fi
+
+    holders="$(list_holders || true)"
+    if [ -n "$holders" ]; then
+        echo "Open camera file descriptors:"
+        list_holders | while IFS=: read -r hp hcomm hdev; do
+            echo "  pid $hp ($hcomm) -> $hdev"
+        done
+    fi
+}
+
+case "${1:-status}" in
+    status)
+        cmd_status
+        ;;
+    on)
+        require_root "$@"
+        touch /run/webcam-ctl.manual
+        unlock_devs
+        echo "Webcam UNLOCKED (0660 root:video). Run 'sudo webcam-ctl off' when finished."
+        ;;
+    off)
+        require_root "$@"
+        force=0
+        if [ "${2:-}" = "--force" ] || [ "${2:-}" = "-f" ]; then
+            force=1
+        fi
+        rm -f /run/webcam-ctl.manual
+        rm -rf /run/webcam-ctl.pids
+        pids="$(list_holders | cut -d: -f1 | sort -u || true)"
+        if [ "$force" -eq 1 ] && [ -n "$pids" ]; then
+            for hp in $pids; do
+                kill "$hp" 2>/dev/null || true
+            done
+            sleep 0.2
+            for hp in $pids; do
+                if [ -d "/proc/$hp" ]; then
+                    kill -9 "$hp" 2>/dev/null || true
+                fi
+            done
+        fi
+        lock_devs
+        rem="$(list_holders || true)"
+        if [ -n "$rem" ]; then
+            echo "Warning: process(es) still hold an open camera fd; close them or run 'sudo webcam-ctl off --force'" >&2
+        fi
+        echo "Webcam LOCKED (0600 root:root)."
+        ;;
+    open-for)
+        require_root "$@"
+        target_pid="${2:-}"
+        case "$target_pid" in
+            ''|*[!0-9]*)
+                echo "Usage: sudo webcam-ctl open-for <pid>" >&2
+                exit 1
+                ;;
+        esac
+        if [ ! -d "/proc/$target_pid" ]; then
+            echo "webcam-ctl: process $target_pid does not exist" >&2
+            exit 1
+        fi
+        mkdir -p /run/webcam-ctl.pids
+        unlock_devs
+        : > "/run/webcam-ctl.pids/$target_pid"
+        /bin/nohup /usr/bin/webcam-ctl _watch "$target_pid" >/dev/null 2>&1 </dev/null &
+        ;;
+    _watch)
+        require_root "$@"
+        trap '' HUP
+        target_pid="${2:-}"
+        while [ -d "/proc/$target_pid" ]; do
+            sleep 1
+        done
+        rm -f "/run/webcam-ctl.pids/$target_pid"
+        if [ ! -f /run/webcam-ctl.manual ] && ! has_live_watchers; then
+            lock_devs
+        fi
+        ;;
+    unlock-prompt)
+        target_pid="${2:-}"
+        echo "Unlocking webcam for this session (auto-locks when camera app closes)..."
+        exec sudo /usr/bin/webcam-ctl open-for "$target_pid"
+        ;;
+    -h|--help|help)
+        echo "Usage: webcam-ctl <status|on|off [--force]|open-for <pid>>"
+        ;;
+    *)
+        echo "Usage: webcam-ctl <status|on|off [--force]|open-for <pid>>" >&2
+        exit 1
+        ;;
+esac
+"""
+
 "usr/bin/guvcview" = """#!/bin/sh
 export LD_LIBRARY_PATH="/usr/lib/guvcview/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export GDK_BACKEND="wayland"
@@ -102,7 +282,18 @@ if [ "$#" -eq 0 ]; then
     cd "${HOME}/Pictures" || true
 fi
 if [ -e /dev/video0 ] && [ ! -r /dev/video0 ]; then
-    echo "[guvcview] Warning: /dev/video0 is not readable; run: sudo chgrp video /dev/video* && sudo chmod 0660 /dev/video*" >&2
+    if [ "$(id -u)" -eq 0 ]; then
+        /usr/bin/webcam-ctl open-for "$$" || true
+    elif [ -t 0 ]; then
+        sudo /usr/bin/webcam-ctl open-for "$$" || true
+    elif command -v alacritty >/dev/null 2>&1; then
+        alacritty --title "Unlock Webcam (sudo)" -e /usr/bin/webcam-ctl unlock-prompt "$$" || true
+    else
+        sudo /usr/bin/webcam-ctl open-for "$$" || true
+    fi
+fi
+if [ -e /dev/video0 ] && [ ! -r /dev/video0 ]; then
+    echo "[guvcview] Warning: /dev/video0 is still locked (run 'sudo webcam-ctl on' or unlock via sudo)." >&2
 fi
 exec /usr/lib/guvcview/bin/guvcview "$@"
 """

@@ -27,7 +27,6 @@ const MODPROBE: &str = "/sbin/modprobe";
 const COLDPLUG_PASSES: usize = 4;
 const MODPROBE_BATCH: usize = 256;
 const AUDIO_GID: libc::gid_t = 29;
-const VIDEO_GID: libc::gid_t = 44;
 
 pub fn kernel_release() -> String {
     unsafe {
@@ -206,13 +205,21 @@ struct VideoEvent {
     minor: Option<String>,
 }
 
-fn chown_chmod_device(path: &Path, gid: libc::gid_t) {
+fn set_device_owner_mode(path: &Path, gid: libc::gid_t, mode: libc::mode_t) {
     if let Ok(c_path) = CString::new(path.to_string_lossy().as_bytes()) {
         unsafe {
             libc::chown(c_path.as_ptr(), 0, gid);
-            libc::chmod(c_path.as_ptr(), 0o660);
+            libc::chmod(c_path.as_ptr(), mode);
         }
     }
+}
+
+fn chown_chmod_device(path: &Path, gid: libc::gid_t) {
+    set_device_owner_mode(path, gid, 0o660);
+}
+
+fn lock_device_root_only(path: &Path) {
+    set_device_owner_mode(path, 0, 0o600);
 }
 
 fn write_sound_udev_tag(udev_file: &str, name_str: &str) {
@@ -263,8 +270,9 @@ pub fn setup_sound_devices() {
     }
 }
 
-/// Grants `video` group access on `/dev/video*` / `/dev/media*` and writes `/run/udev/data`
-/// V4L2 tags so PipeWire / libudev / webcam apps discover cameras without udevd.
+/// Locks `/dev/video*` and `/dev/media*` to `0600 root:root` by default so unprivileged
+/// apps cannot silently access webcams until explicitly unlocked via `webcam-ctl`, while
+/// still writing `/run/udev/data` V4L2 tags so udev/PipeWire see device metadata.
 pub fn setup_video_devices() {
     if let Ok(entries) = fs::read_dir("/dev") {
         for entry in entries.flatten() {
@@ -274,7 +282,7 @@ pub fn setup_video_devices() {
             let name = entry.file_name();
             let Some(name_str) = name.to_str() else { continue };
             if name_str.starts_with("video") || name_str.starts_with("media") {
-                chown_chmod_device(&entry.path(), VIDEO_GID);
+                lock_device_root_only(&entry.path());
             }
         }
     }
@@ -396,7 +404,7 @@ fn handle_video_event(ev: &VideoEvent) {
     if let Some(devname) = ev.devname.as_deref() {
         let rel = devname.trim_start_matches('/');
         if !rel.is_empty() {
-            chown_chmod_device(&Path::new("/dev").join(rel), VIDEO_GID);
+            lock_device_root_only(&Path::new("/dev").join(rel));
         }
         let base = Path::new(rel)
             .file_name()
