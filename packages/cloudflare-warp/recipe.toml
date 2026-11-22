@@ -1,0 +1,213 @@
+[package]
+name = "cloudflare-warp"
+version = "2026.8.2115.0"
+arch = "x86_64-gnu"
+description = "Cloudflare WARP & Zero Trust VPN client (warp-cli, warp-svc, bundled iproute2/nftables)"
+deps = ["clibrary", "kmod"]
+
+[source]
+type = "custom"
+script = """
+REPO_BASE="https://pkg.cloudflareclient.com"
+REL_PATH="$(curl -fsSL "${REPO_BASE}/dists/noble/main/binary-amd64/Packages" | grep '^Filename: pool/noble/main/c/cloudflare-warp/cloudflare-warp_' | sort -V | tail -n 1 | cut -d' ' -f2 || true)"
+if [ -z "${REL_PATH}" ]; then
+    REL_PATH="pool/noble/main/c/cloudflare-warp/cloudflare-warp_${PKG_VERSION}_amd64.deb"
+fi
+
+DEB_PATH="${WORK_DIR}/cloudflare-warp.deb"
+echo "  -> Downloading ${REPO_BASE}/${REL_PATH}..."
+curl -fsSL "${REPO_BASE}/${REL_PATH}" -o "${DEB_PATH}"
+
+DEB_EXTRACT="${WORK_DIR}/deb_extract"
+DEB_ROOT="${WORK_DIR}/deb_root"
+mkdir -p "${DEB_EXTRACT}" "${DEB_ROOT}"
+(cd "${DEB_EXTRACT}" && ar x "${DEB_PATH}")
+DATA_TAR="$(find "${DEB_EXTRACT}" -maxdepth 1 -name 'data.tar.*' | head -n 1)"
+if [ -z "${DATA_TAR}" ]; then
+    echo "ERROR: No data.tar.* found inside ${DEB_PATH}" >&2
+    exit 1
+fi
+echo "  -> Extracting ${DATA_TAR}..."
+tar -xf "${DATA_TAR}" -C "${DEB_ROOT}"
+
+mkdir -p "${STAGE_DIR}/usr/lib/warp/bin" "${STAGE_DIR}/usr/lib/warp/lib" "${STAGE_DIR}/bin"
+
+for b in warp-svc warp-cli warp-diag warp-dex; do
+    if [ -f "${DEB_ROOT}/bin/${b}" ]; then
+        cp -L "${DEB_ROOT}/bin/${b}" "${STAGE_DIR}/usr/lib/warp/bin/${b}"
+        chmod 0755 "${STAGE_DIR}/usr/lib/warp/bin/${b}"
+    fi
+done
+test -x "${STAGE_DIR}/usr/lib/warp/bin/warp-svc"
+test -x "${STAGE_DIR}/usr/lib/warp/bin/warp-cli"
+
+for tool in ip ss nft certutil lsof lsblk ifconfig setcap getcap; do
+    TOOL_PATH="$(PATH="/usr/sbin:/sbin:/usr/bin:/bin" command -v "${tool}" || true)"
+    if [ -n "${TOOL_PATH}" ] && [ -e "${TOOL_PATH}" ]; then
+        cp -L "${TOOL_PATH}" "${STAGE_DIR}/usr/lib/warp/bin/${tool}"
+        chmod 0755 "${STAGE_DIR}/usr/lib/warp/bin/${tool}"
+    else
+        echo "  -> WARN: helper tool '${tool}' not found on build host"
+    fi
+done
+test -x "${STAGE_DIR}/usr/lib/warp/bin/ip"
+test -x "${STAGE_DIR}/usr/lib/warp/bin/nft"
+
+# Bundle non-glibc shared libraries privately into /usr/lib/warp/lib so /usr/lib/x86_64-linux-gnu stays untouched
+python3 - "${STAGE_DIR}/usr/lib/warp/bin" "${STAGE_DIR}/usr/lib/warp/lib" <<'PY'
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+bin_dir = Path(sys.argv[1])
+lib_dir = Path(sys.argv[2])
+lib_dir.mkdir(parents=True, exist_ok=True)
+skip = ("ld-linux-", "libc.so", "libm.so", "libdl.so", "libpthread.so", "librt.so")
+
+seen = set()
+queue = [p for p in sorted(bin_dir.iterdir()) if p.is_file()]
+queue += [p for p in sorted(lib_dir.iterdir()) if p.is_file()]
+
+while queue:
+    cur = queue.pop(0)
+    proc = subprocess.run(["ldd", str(cur)], capture_output=True, text=True)
+    for line in proc.stdout.splitlines():
+        for tok in line.split():
+            if tok.startswith("/") and (tok.startswith("/usr/lib") or tok.startswith("/lib")):
+                dep = Path(tok)
+                name = dep.name
+                if name.startswith(skip) or name in seen or not dep.exists():
+                    continue
+                seen.add(name)
+                dst = lib_dir / name
+                shutil.copy2(dep.resolve(), dst)
+                os.chmod(dst, 0o644)
+                queue.append(dst)
+
+print(f"  -> Bundled {len(seen)} shared libraries into {lib_dir}")
+PY
+
+test -f "${STAGE_DIR}/usr/lib/warp/lib/libpcap.so.0.8"
+test -f "${STAGE_DIR}/usr/lib/warp/lib/libtss2-esys.so.0"
+
+ln -sfn /usr/bin/warp-svc "${STAGE_DIR}/bin/warp-svc"
+ln -sfn /usr/bin/warp-cli "${STAGE_DIR}/bin/warp-cli"
+"""
+
+[install.scripts]
+"usr/bin/warp-svc" = """#!/bin/sh
+set -eu
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH="/usr/lib/warp/bin:/usr/sbin:/sbin:/usr/bin:/bin${PATH:+:$PATH}"
+
+mkdir -p /var/lib/cloudflare-warp /run/cloudflare-warp /var/log/cloudflare-warp
+if command -v modprobe >/dev/null 2>&1; then
+    modprobe tun 2>/dev/null || true
+    modprobe nf_tables 2>/dev/null || true
+fi
+
+if [ "${1:-}" = "--daemon" ]; then
+    if [ -S /run/cloudflare-warp/warp_service ]; then
+        if [ -f /run/cloudflare-warp/warp-svc.pid ]; then
+            OLD_PID="$(cat /run/cloudflare-warp/warp-svc.pid 2>/dev/null || true)"
+            if [ -n "${OLD_PID}" ] && [ -d "/proc/${OLD_PID}" ]; then
+                exit 0
+            fi
+        fi
+        rm -f /run/cloudflare-warp/warp_service /run/cloudflare-warp/warp-svc.pid
+    fi
+    nohup /usr/lib/warp/bin/warp-svc >/var/log/cloudflare-warp/warp-svc.log 2>&1 </dev/null &
+    echo "$!" > /run/cloudflare-warp/warp-svc.pid
+    i=0
+    while [ ! -S /run/cloudflare-warp/warp_service ] && [ "$i" -lt 50 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    test -S /run/cloudflare-warp/warp_service
+    exit 0
+fi
+
+exec /usr/lib/warp/bin/warp-svc "$@"
+"""
+
+"usr/bin/warp-cli" = """#!/bin/sh
+set -eu
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH="/usr/lib/warp/bin:/usr/sbin:/sbin:/usr/bin:/bin${PATH:+:$PATH}"
+
+NEEDS_DAEMON=1
+for arg in "$@"; do
+    case "$arg" in
+        --help|-h|--version|-V|help) NEEDS_DAEMON=0 ;;
+    esac
+done
+
+DAEMON_UP=0
+if [ -S /run/cloudflare-warp/warp_service ]; then
+    if [ -f /run/cloudflare-warp/warp-svc.pid ]; then
+        PID="$(cat /run/cloudflare-warp/warp-svc.pid 2>/dev/null || true)"
+        if [ -n "${PID}" ] && [ -d "/proc/${PID}" ]; then
+            DAEMON_UP=1
+        fi
+    else
+        DAEMON_UP=1
+    fi
+fi
+
+if [ "${NEEDS_DAEMON}" -eq 1 ] && [ "${DAEMON_UP}" -eq 0 ]; then
+    if [ "$(id -u)" -eq 0 ]; then
+        /usr/bin/warp-svc --daemon
+    else
+        sudo /usr/bin/warp-svc --daemon
+    fi
+fi
+
+exec /usr/lib/warp/bin/warp-cli "$@"
+"""
+
+"usr/bin/warp-diag" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/warp/bin/warp-diag "$@"
+"""
+
+"usr/bin/warp-dex" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/warp/bin/warp-dex "$@"
+"""
+
+"usr/sbin/ip" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/warp/bin/ip "$@"
+"""
+
+"sbin/ip" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/warp/bin/ip "$@"
+"""
+
+"usr/bin/ip" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/warp/bin/ip "$@"
+"""
+
+"usr/sbin/nft" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/warp/bin/nft "$@"
+"""
+
+"sbin/nft" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/warp/bin/nft "$@"
+"""
+
+"usr/bin/nft" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/warp/bin/nft "$@"
+"""
+
+"usr/bin/certutil" = """#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/warp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/warp/bin/certutil "$@"
+"""

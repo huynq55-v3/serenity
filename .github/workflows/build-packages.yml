@@ -193,6 +193,12 @@ jobs:
               elif [ "${{ matrix.package }}" = "claude" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends zstd curl ca-certificates tar gzip
+              elif [ "${{ matrix.package }}" = "cloudflare-warp" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends \
+                  zstd binutils curl ca-certificates iproute2 nftables \
+                  libpcap0.8 libtss2-esys-3.0.2-0t64 libtss2-tctildr0t64 \
+                  libnss3-tools lsof util-linux net-tools libcap2-bin
               else
                 command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
               fi
