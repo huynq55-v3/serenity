@@ -1,6 +1,6 @@
 [package]
 name = "guvcview"
-version = "2.0.8-r1"
+version = "2.0.8-r2"
 arch = "x86_64-gnu"
 description = "GTK+ UVC Viewer webcam capture app (take photos and record video via V4L2)"
 deps = ["clibrary", "pipewire"]
@@ -146,6 +146,12 @@ require_root() {
     fi
 }
 
+guard_active() {
+    [ -x /usr/bin/serenity-guard ] && [ -f /run/serenity-guard/daemon.pid ] || return 1
+    GPID="$(cat /run/serenity-guard/daemon.pid 2>/dev/null || true)"
+    [ -n "$GPID" ] && [ -d "/proc/$GPID" ]
+}
+
 cmd_status() {
     has_dev=0
     unlocked=0
@@ -191,15 +197,27 @@ cmd_status() {
 
 case "${1:-status}" in
     status)
+        if guard_active; then
+            exec /usr/bin/serenity-guard webcam status
+        fi
         cmd_status
         ;;
     on)
+        if guard_active; then
+            exec /usr/bin/serenity-guard webcam on
+        fi
         require_root "$@"
         touch /run/webcam-ctl.manual
         unlock_devs
         echo "Webcam UNLOCKED (0660 root:video). Run 'sudo webcam-ctl off' when finished."
         ;;
     off)
+        if guard_active; then
+            if [ "${2:-}" = "--force" ] || [ "${2:-}" = "-f" ]; then
+                exec /usr/bin/serenity-guard webcam off --force
+            fi
+            exec /usr/bin/serenity-guard webcam off
+        fi
         require_root "$@"
         force=0
         if [ "${2:-}" = "--force" ] || [ "${2:-}" = "-f" ]; then
@@ -227,6 +245,9 @@ case "${1:-status}" in
         echo "Webcam LOCKED (0600 root:root)."
         ;;
     open-for)
+        if guard_active; then
+            exec /usr/bin/serenity-guard webcam on
+        fi
         require_root "$@"
         target_pid="${2:-}"
         case "$target_pid" in
@@ -282,7 +303,9 @@ if [ "$#" -eq 0 ]; then
     cd "${HOME}/Pictures" || true
 fi
 if [ -e /dev/video0 ] && [ ! -r /dev/video0 ]; then
-    if [ "$(id -u)" -eq 0 ]; then
+    if [ -x /usr/bin/serenity-guard ] && [ -f /run/serenity-guard/daemon.pid ] && /usr/bin/webcam-ctl open-for "$$" >/dev/null 2>&1; then
+        :
+    elif [ "$(id -u)" -eq 0 ]; then
         /usr/bin/webcam-ctl open-for "$$" || true
     elif [ -t 0 ]; then
         sudo /usr/bin/webcam-ctl open-for "$$" || true

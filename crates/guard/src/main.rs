@@ -4,6 +4,7 @@ pub mod fim;
 pub mod mcp;
 pub mod net_mon;
 pub mod proc_mon;
+pub mod webcam;
 
 use fim::{FimEntry, FimMonitor};
 use net_mon::{NetConnection, NetMonitor};
@@ -55,6 +56,8 @@ pub struct GuardSnapshot {
     pub connections: Vec<NetConnection>,
     pub fim_entries: Vec<FimEntry>,
     pub recent_procs: Vec<ProcEventRecord>,
+    #[serde(default)]
+    pub webcam: webcam::WebcamStatus,
 }
 
 pub struct GuardState {
@@ -69,6 +72,7 @@ pub struct GuardState {
     pub recent_procs: VecDeque<ProcEventRecord>,
     pub forensic_cache: HashMap<i32, actions::ForensicReport>,
     pub request_fim_rebaseline: bool,
+    pub webcam_shield: webcam::WebcamShield,
 }
 
 impl GuardState {
@@ -85,6 +89,7 @@ impl GuardState {
             recent_procs: VecDeque::new(),
             forensic_cache: HashMap::new(),
             request_fim_rebaseline: false,
+            webcam_shield: webcam::WebcamShield::new(now),
         }
     }
 
@@ -218,8 +223,40 @@ impl GuardState {
             connections: self.connections.clone(),
             fim_entries: self.fim_entries.clone(),
             recent_procs: self.recent_procs.iter().cloned().collect(),
+            webcam: self.webcam_shield.status(),
         }
     }
+}
+
+fn handle_webcam_action(
+    st: &mut GuardState,
+    now: u64,
+    unlock: bool,
+    force_kill: bool,
+) -> Result<String, String> {
+    let (msg, severity, rule_id) = if unlock {
+        (st.webcam_shield.unlock(now)?, "INFO", "WEBCAM_UNLOCKED")
+    } else if force_kill {
+        (
+            st.webcam_shield.lock(now, true)?,
+            "DEFENSE",
+            "WEBCAM_FORCE_LOCKED",
+        )
+    } else {
+        (st.webcam_shield.lock(now, false)?, "DEFENSE", "WEBCAM_LOCKED")
+    };
+    st.push_alert(
+        now,
+        severity,
+        rule_id,
+        msg.clone(),
+        None,
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
+    Ok(msg)
 }
 
 #[derive(Clone)]
@@ -412,6 +449,14 @@ impl GuardShared {
                     String::new(),
                 );
                 Ok("Requested SHA-256 FIM re-baseline".to_string())
+            }
+            "set_webcam" => {
+                let mut st = self.state.lock().unwrap();
+                handle_webcam_action(&mut st, now, enabled, false)
+            }
+            "force_lock_webcam" => {
+                let mut st = self.state.lock().unwrap();
+                handle_webcam_action(&mut st, now, false, true)
             }
             "simulate_alert" => {
                 let sleep_bin = if Path::new("/bin/sleep").exists() {
@@ -666,6 +711,25 @@ fn run_daemon() -> Result<(), String> {
                 st.connections = conns;
                 st.fim_entries = fim_snap;
 
+                let (_cam_status, cam_changed, cam_alert) = st.webcam_shield.poll(now);
+                if cam_changed {
+                    changed = true;
+                }
+                if let Some(wa) = cam_alert {
+                    st.push_alert(
+                        now,
+                        wa.severity,
+                        wa.rule_id,
+                        wa.summary,
+                        wa.pid,
+                        wa.exe,
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    );
+                    changed = true;
+                }
+
                 for fa in fim_alerts {
                     st.push_alert(
                         now,
@@ -838,7 +902,105 @@ fn print_usage() {
     println!("  freeze <pid>                   Freeze suspicious process in RAM (SIGSTOP)");
     println!("  resume <pid>                   Resume frozen process (SIGCONT)");
     println!("  kill <pid>                     Terminate malicious process (SIGKILL)");
+    println!("  webcam <status|on|off [--force]> Manage on-demand webcam privacy lock");
     println!("  mcp                            Run JSON-RPC 2.0 MCP server over stdio for AI agents");
+}
+
+fn format_webcam_summary(cam: &webcam::WebcamStatus) -> String {
+    if !cam.has_device {
+        return "NO_DEVICE".to_string();
+    }
+    let countdown = cam
+        .auto_lock_secs_remaining
+        .map(|s| format!(" ({}s left)", s))
+        .unwrap_or_default();
+    if cam.holders.is_empty() {
+        format!("{}{}", cam.state, countdown)
+    } else {
+        let hlist: Vec<String> = cam
+            .holders
+            .iter()
+            .map(|h| format!("{}[{}]", h.comm, h.pid))
+            .collect();
+        format!("{}{} holders={}", cam.state, countdown, hlist.join(", "))
+    }
+}
+
+fn print_action_response(resp_body: &str) -> Result<(), String> {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(resp_body) {
+        let ok = val.get("ok").and_then(|v| v.as_bool()).unwrap_or(true);
+        let msg = val
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or(resp_body);
+        if ok {
+            println!("[serenity-guard] {}", msg);
+            return Ok(());
+        }
+        return Err(msg.to_string());
+    }
+    println!("{}", resp_body);
+    Ok(())
+}
+
+fn run_webcam_cli(args: &[String], json_flag: bool) -> Result<(), String> {
+    let sub = args.get(1).map(|s| s.as_str()).unwrap_or("status");
+    let force = args.iter().any(|a| a == "--force" || a == "-f");
+    match sub {
+        "status" => {
+            let snap = load_snapshot_for_cli()?;
+            if json_flag {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&snap.webcam).unwrap_or_default()
+                );
+            } else {
+                println!("Webcam Shield : {}", format_webcam_summary(&snap.webcam));
+                if !snap.webcam.devices.is_empty() {
+                    println!("Devices       : {}", snap.webcam.devices.join(", "));
+                }
+                for h in &snap.webcam.holders {
+                    println!("  holder pid {} ({}) -> {}", h.pid, h.comm, h.device);
+                }
+            }
+            Ok(())
+        }
+        "on" => {
+            if let Ok(resp) =
+                mcp::http_post_action(&json!({"action": "set_webcam", "enabled": true}))
+            {
+                print_action_response(&resp)
+            } else {
+                let now = epoch_now();
+                let mut shield = webcam::WebcamShield::new(now);
+                let msg = shield.unlock(now)?;
+                println!("[serenity-guard] {}", msg);
+                Ok(())
+            }
+        }
+        "off" => {
+            let action_name = if force {
+                "force_lock_webcam"
+            } else {
+                "set_webcam"
+            };
+            if let Ok(resp) =
+                mcp::http_post_action(&json!({"action": action_name, "enabled": false}))
+            {
+                print_action_response(&resp)
+            } else {
+                let now = epoch_now();
+                let mut shield = webcam::WebcamShield::new(now);
+                let msg = shield.lock(now, force)?;
+                println!("[serenity-guard] {}", msg);
+                Ok(())
+            }
+        }
+        other => Err(format!(
+            "Usage: serenity-guard webcam <status|on|off [--force]> (got '{}')",
+            other
+        )),
+    }
 }
 
 fn load_snapshot_for_cli() -> Result<GuardSnapshot, String> {
@@ -872,6 +1034,7 @@ fn load_snapshot_for_cli() -> Result<GuardSnapshot, String> {
         connections,
         fim_entries: fim_mon.snapshot(),
         recent_procs: Vec::new(),
+        webcam: webcam::WebcamShield::one_shot_status(),
     })
 }
 
@@ -949,6 +1112,7 @@ fn main() {
                             snap.blocked_ips.join(", ")
                         }
                     );
+                    println!("Webcam Shield : {}", format_webcam_summary(&snap.webcam));
                 }
                 Ok(())
             }
@@ -1154,6 +1318,7 @@ fn main() {
                 }
             })
         }
+        "webcam" => run_webcam_cli(&args, json_flag),
         "-h" | "--help" | "help" => {
             print_usage();
             Ok(())

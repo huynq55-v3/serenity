@@ -23,6 +23,17 @@ struct ActionRequest {
     enabled: bool,
 }
 
+pub fn is_allowed_post_origin(origin: Option<&str>) -> bool {
+    match origin {
+        None => true,
+        Some(o) => {
+            let norm = o.trim().trim_end_matches('/');
+            norm.eq_ignore_ascii_case("http://127.0.0.1:9443")
+                || norm.eq_ignore_ascii_case("http://localhost:9443")
+        }
+    }
+}
+
 pub fn spawn_http_server(shared: GuardShared) -> Result<(), String> {
     let listener = TcpListener::bind(DASHBOARD_BIND_ADDR)
         .map_err(|e| format!("Failed to bind {}: {}", DASHBOARD_BIND_ADDR, e))?;
@@ -58,6 +69,7 @@ fn handle_client(mut stream: TcpStream, shared: GuardShared) -> Result<(), std::
     let raw_path = parts[1];
 
     let mut content_length = 0usize;
+    let mut origin_header: Option<String> = None;
     loop {
         let mut line = String::new();
         let n = reader.read_line(&mut line)?;
@@ -67,6 +79,11 @@ fn handle_client(mut stream: TcpStream, shared: GuardShared) -> Result<(), std::
         if let Some((k, v)) = line.split_once(':') {
             if k.trim().eq_ignore_ascii_case("content-length") {
                 content_length = v.trim().parse().unwrap_or(0);
+            } else if k.trim().eq_ignore_ascii_case("origin") {
+                let val = v.trim();
+                if !val.is_empty() {
+                    origin_header = Some(val.to_string());
+                }
             }
         }
     }
@@ -133,6 +150,21 @@ fn handle_client(mut stream: TcpStream, shared: GuardShared) -> Result<(), std::
         }
         ("GET", "/api/events") => handle_sse_stream(stream, shared),
         ("POST", "/api/action") => {
+            if !is_allowed_post_origin(origin_header.as_deref()) {
+                let err_json = serde_json::json!({
+                    "ok": false,
+                    "message": format!(
+                        "Forbidden cross-origin POST from '{}'",
+                        origin_header.unwrap_or_default()
+                    ),
+                });
+                return write_response(
+                    &mut stream,
+                    "403 Forbidden",
+                    "application/json",
+                    err_json.to_string().as_bytes(),
+                );
+            }
             let req: ActionRequest = match serde_json::from_slice(&body) {
                 Ok(r) => r,
                 Err(e) => {
@@ -592,6 +624,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       <span id="sse-text">LIVE SSE STREAM</span>
     </div>
     <button id="btn-autodefend" class="btn-ok" onclick="toggleAutoDefend()">Auto-Defend: ON</button>
+    <button id="btn-webcam" class="btn-ok" onclick="toggleWebcam()">📷 Webcam: LOCKED</button>
     <button id="btn-siren" class="btn-ok" onclick="toggleSirenAndNoti()">🔔 Siren &amp; Noti: ON</button>
     <button class="btn-info" onclick="testSirenAndNoti()">🔊 Test Alarm</button>
     <button class="btn-warn" onclick="simulateDrill()">Simulate Attack Drill</button>
@@ -625,6 +658,17 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       <button class="btn-crit btn-xs" onclick="blockIpFromInput()">Block IP</button>
     </div>
     <div class="chip-list" id="blocked-ips-chips"></div>
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-title"><span>WEBCAM PRIVACY SHIELD</span><span id="kpi-webcam-badge" class="badge badge-OK">LOCKED</span></div>
+    <div class="kpi-val" id="kpi-webcam-val">LOCKED (0600)</div>
+    <div class="kpi-sub" id="kpi-webcam-sub">Auto-locks 5s after all apps close camera</div>
+    <div class="action-bar" style="margin-top:8px">
+      <button id="kpi-webcam-toggle" class="btn-ok btn-xs" onclick="toggleWebcam()">Unlock Webcam</button>
+      <button id="kpi-webcam-force" class="btn-crit btn-xs" style="display:none" onclick="forceLockWebcam()">Force Cut</button>
+    </div>
+    <div class="chip-list" id="webcam-holders-chips"></div>
   </div>
 </div>
 
@@ -914,6 +958,13 @@ function toggleAutoDefend() {
   const next = !(currentState && currentState.auto_defend);
   apiAction({ action: 'set_auto_defend', enabled: next });
 }
+function toggleWebcam() {
+  const isUnlocked = Boolean(currentState && currentState.webcam && currentState.webcam.unlocked);
+  apiAction({ action: 'set_webcam', enabled: !isUnlocked });
+}
+function forceLockWebcam() {
+  apiAction({ action: 'force_lock_webcam' });
+}
 function clearAlerts() {
   apiAction({ action: 'clear_alerts' });
 }
@@ -1011,6 +1062,77 @@ function renderSnapshot(st) {
     chips.innerHTML = blocked.map(ip => `
       <span class="ip-chip">${esc(ip)}
         <button title="Unblock ${esc(ip)}" onclick="unblockIp('${esc(ip)}')">×</button>
+      </span>
+    `).join('');
+  }
+
+  // KPI & Header: Webcam Privacy Shield
+  const cam = st.webcam || { has_device: false, devices: [], unlocked: false, state: 'LOCKED', holders: [] };
+  const camHolders = cam.holders || [];
+  const btnCam = document.getElementById('btn-webcam');
+  const camBadge = document.getElementById('kpi-webcam-badge');
+  const camVal = document.getElementById('kpi-webcam-val');
+  const camSub = document.getElementById('kpi-webcam-sub');
+  const camToggle = document.getElementById('kpi-webcam-toggle');
+  const camForce = document.getElementById('kpi-webcam-force');
+  const camChips = document.getElementById('webcam-holders-chips');
+
+  if (!cam.has_device) {
+    btnCam.textContent = '📷 Webcam: NO DEV';
+    btnCam.className = 'btn-info';
+    camBadge.textContent = 'NO DEVICE';
+    camBadge.className = 'badge badge-INFO';
+    camVal.textContent = 'NONE';
+    camSub.textContent = 'No /dev/video* device attached';
+    camToggle.textContent = 'Unlock Webcam';
+    camToggle.className = 'btn-info btn-xs';
+  } else if (cam.state === 'IN_USE') {
+    btnCam.textContent = `📷 Webcam: IN USE (${camHolders.length})`;
+    btnCam.className = 'btn-crit';
+    camBadge.textContent = 'IN USE';
+    camBadge.className = 'badge badge-CRITICAL';
+    camVal.textContent = `${camHolders.length} ACTIVE`;
+    camSub.textContent = 'Auto-locks 5s after app turns off camera';
+    camToggle.textContent = 'Lock Now';
+    camToggle.className = 'btn-warn btn-xs';
+  } else if (cam.state === 'IDLE_RELOCKING') {
+    const rem = cam.auto_lock_secs_remaining ?? 0;
+    btnCam.textContent = `📷 Webcam: AUTO-LOCK ${rem}s`;
+    btnCam.className = 'btn-warn';
+    camBadge.textContent = `AUTO-LOCK ${rem}s`;
+    camBadge.className = 'badge badge-HIGH';
+    camVal.textContent = `IDLE (${rem}s)`;
+    camSub.textContent = `No active reader — locking to 0600 in ${rem}s`;
+    camToggle.textContent = 'Lock Now';
+    camToggle.className = 'btn-warn btn-xs';
+  } else if (cam.state === 'WAITING') {
+    const rem = cam.auto_lock_secs_remaining ?? 0;
+    btnCam.textContent = `📷 Webcam: UNLOCKED ${rem}s`;
+    btnCam.className = 'btn-warn';
+    camBadge.textContent = `WAITING ${rem}s`;
+    camBadge.className = 'badge badge-HIGH';
+    camVal.textContent = `OPEN (${rem}s)`;
+    camSub.textContent = `Waiting for Chrome/Meet/GUVCView (${rem}s grace)`;
+    camToggle.textContent = 'Lock Now';
+    camToggle.className = 'btn-warn btn-xs';
+  } else {
+    btnCam.textContent = '📷 Webcam: LOCKED';
+    btnCam.className = 'btn-ok';
+    camBadge.textContent = 'LOCKED';
+    camBadge.className = 'badge badge-OK';
+    camVal.textContent = 'LOCKED (0600)';
+    camSub.textContent = `${(cam.devices || []).join(', ') || '/dev/video0'} root-only`;
+    camToggle.textContent = 'Unlock Webcam';
+    camToggle.className = 'btn-ok btn-xs';
+  }
+
+  camForce.style.display = camHolders.length > 0 ? 'inline-block' : 'none';
+  if (camHolders.length === 0) {
+    camChips.innerHTML = '';
+  } else {
+    camChips.innerHTML = camHolders.map(h => `
+      <span class="ip-chip" style="background:var(--high-bg);border-color:rgba(245,158,11,0.4);color:#fcd34d">
+        <a href="javascript:void(0)" style="color:inherit;text-decoration:none" onclick="inspectPid(${h.pid})">${esc(h.comm)} (${h.pid})</a>
       </span>
     `).join('');
   }
@@ -1144,3 +1266,17 @@ connectSse();
 </body>
 </html>
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_post_origin_csrf_guard() {
+        assert!(is_allowed_post_origin(None));
+        assert!(is_allowed_post_origin(Some("http://127.0.0.1:9443")));
+        assert!(is_allowed_post_origin(Some("http://localhost:9443/")));
+        assert!(!is_allowed_post_origin(Some("https://evil.example")));
+        assert!(!is_allowed_post_origin(Some("https://meet.google.com")));
+    }
+}
