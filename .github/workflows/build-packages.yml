@@ -190,9 +190,9 @@ jobs:
               elif [ "${{ matrix.package }}" = "nvm" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends zstd curl ca-certificates xz-utils tar gzip gawk grep sed
-              elif [ "${{ matrix.package }}" = "claude-desktop" ]; then
+              elif [ "${{ matrix.package }}" = "claude" ]; then
                 sudo apt-get update
-                sudo apt-get install -y --no-install-recommends zstd binutils curl ca-certificates libxtst6 libuuid1 socat libayatana-appindicator3-1
+                sudo apt-get install -y --no-install-recommends zstd curl ca-certificates tar gzip
               else
                 command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
               fi

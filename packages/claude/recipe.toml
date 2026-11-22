@@ -1,9 +1,24 @@
 [package]
 name = "claude"
-version = "6.28899.6"
-arch = "any"
-description = "Claude Desktop alias package (installs claude-desktop)"
-deps = ["claude-desktop"]
+version = "2.1.330"
+arch = "x86_64-gnu"
+description = "Claude Code CLI (native Linux x64 binary)"
+deps = ["clibrary", "ripgrep", "git", "bash"]
 
 [source]
-type = "meta"
+type = "custom"
+script = """
+TARBALL_URL="$(curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/latest | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d.get("dist", {}).get("tarball", ""))' || true)"
+if [ -z "${TARBALL_URL}" ]; then
+    TARBALL_URL="https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-${PKG_VERSION}.tgz"
+fi
+
+echo "  -> Downloading ${TARBALL_URL}..."
+TGZ_PATH="${WORK_DIR}/claude.tgz"
+curl -fsSL "${TARBALL_URL}" -o "${TGZ_PATH}"
+
+mkdir -p "${STAGE_DIR}/usr/bin"
+tar -xzf "${TGZ_PATH}" -C "${STAGE_DIR}/usr/bin" --strip-components=1 package/claude
+chmod 0755 "${STAGE_DIR}/usr/bin/claude"
+test -x "${STAGE_DIR}/usr/bin/claude"
+"""
