@@ -5,7 +5,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Border, Color, Element, Font, Length, Size, Theme};
 use serenity_ui::{
-    DEJAVU_SANS, resolve_bin,
+    ROBOTO_REGULAR, resolve_bin,
     sysinfo::{SystemSnapshot, read_system_snapshot},
     wifi::{WifiNetwork, connect_network, detect_wifi_interface, scan_networks},
 };
@@ -346,8 +346,8 @@ impl DesktopShell {
 fn main() -> iced::Result {
     iced::application(DesktopShell::title, DesktopShell::update, DesktopShell::view)
         .theme(|_| Theme::TokyoNight)
-        .font(DEJAVU_SANS)
-        .default_font(Font::with_name("DejaVu Sans"))
+        .font(ROBOTO_REGULAR)
+        .default_font(Font::with_name("Roboto"))
         .decorations(false)
         .window_size(Size::new(1920.0, 1080.0))
         .run()

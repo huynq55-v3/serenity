@@ -2,7 +2,7 @@ use std::process::Command;
 
 use iced::widget::{button, column, container, text, text_input};
 use iced::{Border, Color, Element, Font, Length, Size, Theme};
-use serenity_ui::{DEJAVU_SANS, resolve_bin, sysinfo::read_system_snapshot};
+use serenity_ui::{ROBOTO_REGULAR, resolve_bin, sysinfo::read_system_snapshot};
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -135,8 +135,8 @@ impl LoginApp {
 fn main() -> iced::Result {
     iced::application(LoginApp::title, LoginApp::update, LoginApp::view)
         .theme(|_| Theme::TokyoNight)
-        .font(DEJAVU_SANS)
-        .default_font(Font::with_name("DejaVu Sans"))
+        .font(ROBOTO_REGULAR)
+        .default_font(Font::with_name("Roboto"))
         .decorations(false)
         .window_size(Size::new(1920.0, 1080.0))
         .run()

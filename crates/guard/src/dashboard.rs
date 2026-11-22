@@ -262,7 +262,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
     --info: #3b82f6;
     --info-bg: rgba(59, 130, 246, 0.14);
     --mono: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
-    --sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --sans: 'Roboto', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {

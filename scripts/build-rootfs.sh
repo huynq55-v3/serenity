@@ -25,7 +25,7 @@ rm -rf "${STAGE_DIR}"
 mkdir -p "${STAGE_DIR}"/{bin,usr/bin,usr/local/bin,usr/share/applications,usr/share/icons/hicolor/scalable/apps,sbin,etc,proc,sys,dev,tmp,run,root,home/serenity,var/db/spkg}
 
 # Copy static overlay files (includes /etc/os-release, /etc/hosts, /etc/resolv.conf,
-# TLS CA certs, Fontconfig, D-Bus session.conf, GLVND 50_mesa.json, XKB, locale, and DejaVu fonts)
+# TLS CA certs, Fontconfig, D-Bus session.conf, GLVND 50_mesa.json, XKB, locale, and Roboto, Noto Color Emoji & DejaVu fonts)
 cp -a "${ROOT_DIR}/rootfs/overlay/." "${STAGE_DIR}/"
 
 # Install PID 1 + poweroff/reboot/cosmic-osd/start-desktop multicall symlinks

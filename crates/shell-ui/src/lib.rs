@@ -4,6 +4,7 @@ pub mod wifi;
 use std::path::{Path, PathBuf};
 
 pub const DEJAVU_SANS: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
+pub const ROBOTO_REGULAR: &[u8] = include_bytes!("../assets/Roboto-Regular.ttf");
 
 /// Resolves a sibling Serenity binary (`serenity-shell`, `serenity-login`)
 /// from the same directory as the current executable first (works in both `target/debug/` and `/usr/bin/`).
