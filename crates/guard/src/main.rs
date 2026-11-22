@@ -494,6 +494,8 @@ fn run_daemon() -> Result<(), String> {
     let now = epoch_now();
     let proc_sock = ProcConnectorSocket::open();
     let proc_active = proc_sock.is_some();
+    let ssh_guard = fim::SshKeyGuard::open();
+    let ssh_guard_active = ssh_guard.is_some();
 
     let mut fim_mon = FimMonitor::new();
     let mut net_mon = NetMonitor::new();
@@ -512,9 +514,10 @@ fn run_daemon() -> Result<(), String> {
         "INFO",
         "GUARD_DAEMON_STARTED",
         format!(
-            "Serenity Guard active on http://{} (PROC_EVENTS={}, fanotify+SHA256={} core files, Auto-Defend=ON)",
+            "Serenity Guard active on http://{} (PROC_EVENTS={}, SSH_KEY_VAULT={}, fanotify+SHA256={} core files, Auto-Defend=ON)",
             dashboard::DASHBOARD_BIND_ADDR,
             if proc_active { "ONLINE" } else { "OFFLINE" },
+            if ssh_guard_active { "LOCKED_TO_GIT" } else { "INACTIVE" },
             init_state.fim_entries.len()
         ),
         Some(my_pid),
@@ -531,6 +534,34 @@ fn run_daemon() -> Result<(), String> {
 
     dashboard::spawn_http_server(shared.clone())?;
     shared.broadcast_snapshot();
+
+    if let Some(guard) = ssh_guard {
+        let ssh_shared = shared.clone();
+        thread::spawn(move || loop {
+            let alerts = guard.wait_next_event();
+            if alerts.is_empty() {
+                continue;
+            }
+            let now = epoch_now();
+            {
+                let mut st = ssh_shared.state.lock().unwrap();
+                for a in alerts {
+                    st.push_alert(
+                        now,
+                        a.severity,
+                        a.rule_id,
+                        a.summary,
+                        a.actor_pid,
+                        a.actor_exe.unwrap_or_default(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    );
+                }
+            }
+            ssh_shared.broadcast_snapshot();
+        });
+    }
 
     if let Some(sock) = proc_sock {
         let proc_shared = shared.clone();

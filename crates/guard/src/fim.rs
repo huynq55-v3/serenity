@@ -240,13 +240,24 @@ const SYS_FANOTIFY_INIT: libc::c_long = 300;
 const SYS_FANOTIFY_MARK: libc::c_long = 301;
 
 const FAN_CLASS_NOTIF: libc::c_uint = 0x0000_0000;
+const FAN_CLASS_CONTENT: libc::c_uint = 0x0000_0004;
 const FAN_CLOEXEC: libc::c_uint = 0x0000_0001;
 const FAN_NONBLOCK: libc::c_uint = 0x0000_0002;
 
 const FAN_MARK_ADD: libc::c_uint = 0x0000_0001;
 const FAN_MODIFY: u64 = 0x0000_0002;
 const FAN_CLOSE_WRITE: u64 = 0x0000_0008;
+const FAN_OPEN_PERM: u64 = 0x0001_0000;
 const FAN_EVENT_ON_CHILD: u64 = 0x0800_0000;
+
+const FAN_ALLOW: u32 = 0x01;
+const FAN_DENY: u32 = 0x02;
+
+#[repr(C)]
+struct FanotifyResponse {
+    fd: i32,
+    response: u32,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -549,6 +560,240 @@ impl Drop for FimMonitor {
     }
 }
 
+pub fn is_ssh_private_key_path(path: &str) -> bool {
+    let Some((_, file_part)) = path.rsplit_once("/.ssh/") else {
+        return false;
+    };
+    if file_part.is_empty() || file_part.contains('/') {
+        return false;
+    }
+    let lower = file_part.to_ascii_lowercase();
+    if lower.ends_with(".pub")
+        || matches!(
+            lower.as_str(),
+            "known_hosts" | "known_hosts.old" | "authorized_keys" | "config"
+        )
+    {
+        return false;
+    }
+    true
+}
+
+fn is_git_bin(exe: &str) -> bool {
+    exe == "/usr/bin/git" || exe.starts_with("/usr/lib/git-core/")
+}
+
+pub fn is_git_authorized_opener(exe: &str, ancestor_exes: &[String]) -> bool {
+    if is_git_bin(exe) {
+        return true;
+    }
+    if exe == "/usr/bin/ssh" || exe == "/bin/ssh" {
+        return ancestor_exes.iter().any(|a| is_git_bin(a));
+    }
+    false
+}
+
+pub fn check_pid_git_authorized(pid: i32) -> (bool, String, String, String) {
+    let (mut cur_ppid, _, _, comm, exe, cmdline) = crate::proc_mon::read_proc_meta(pid);
+    let exe_clean = exe.trim_end_matches(" (deleted)").to_string();
+
+    let mut ancestors = Vec::new();
+    for _ in 0..8 {
+        if cur_ppid <= 1 {
+            break;
+        }
+        let (next_ppid, _, _, _, p_exe, _) = crate::proc_mon::read_proc_meta(cur_ppid);
+        let p_clean = p_exe.trim_end_matches(" (deleted)").to_string();
+        if !p_clean.is_empty() {
+            ancestors.push(p_clean);
+        }
+        if next_ppid == cur_ppid {
+            break;
+        }
+        cur_ppid = next_ppid;
+    }
+
+    let allowed = is_git_authorized_opener(&exe_clean, &ancestors);
+    (allowed, comm, exe, cmdline)
+}
+
+pub struct SshKeyGuard {
+    fd: i32,
+}
+
+impl SshKeyGuard {
+    pub fn open() -> Option<Self> {
+        let flags = FAN_CLASS_CONTENT | FAN_CLOEXEC;
+        let event_f_flags = (libc::O_RDONLY | libc::O_LARGEFILE | libc::O_CLOEXEC) as libc::c_uint;
+        let fd = unsafe { libc::syscall(SYS_FANOTIFY_INIT, flags, event_f_flags) as i32 };
+        if fd < 0 {
+            return None;
+        }
+
+        let mask: u64 = FAN_OPEN_PERM | FAN_EVENT_ON_CHILD;
+        let mut marked_any = false;
+
+        for dir in ["/home/serenity/.ssh", "/root/.ssh"] {
+            if !Path::new(dir).exists() {
+                continue;
+            }
+            if let Ok(c_dir) = CString::new(dir) {
+                let rc = unsafe {
+                    libc::syscall(
+                        SYS_FANOTIFY_MARK,
+                        fd,
+                        FAN_MARK_ADD,
+                        mask,
+                        libc::AT_FDCWD,
+                        c_dir.as_ptr(),
+                    )
+                };
+                if rc == 0 {
+                    marked_any = true;
+                }
+            }
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let path_str = path.to_string_lossy();
+                    if is_ssh_private_key_path(&path_str) {
+                        if let Ok(c_file) = CString::new(path_str.as_ref()) {
+                            let rc = unsafe {
+                                libc::syscall(
+                                    SYS_FANOTIFY_MARK,
+                                    fd,
+                                    FAN_MARK_ADD,
+                                    FAN_OPEN_PERM,
+                                    libc::AT_FDCWD,
+                                    c_file.as_ptr(),
+                                )
+                            };
+                            if rc == 0 {
+                                marked_any = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !marked_any {
+            unsafe {
+                libc::close(fd);
+            }
+            return None;
+        }
+
+        Some(Self { fd })
+    }
+
+    pub fn wait_next_event(&self) -> Vec<FimAlert> {
+        let mut alerts = Vec::new();
+        let mut buf = [0u8; 4096];
+
+        let n = unsafe {
+            libc::read(
+                self.fd,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+            )
+        };
+        if n <= 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::EINTR) {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            return alerts;
+        }
+
+        let n = n as usize;
+        let my_pid = unsafe { libc::getpid() };
+        let mut offset = 0usize;
+        let mut seen_denied: Vec<(i32, String)> = Vec::new();
+
+        while offset + std::mem::size_of::<FanotifyEventMetadata>() <= n {
+            let meta: FanotifyEventMetadata = unsafe {
+                std::ptr::read_unaligned(buf[offset..].as_ptr() as *const FanotifyEventMetadata)
+            };
+            if meta.event_len < std::mem::size_of::<FanotifyEventMetadata>() as u32 {
+                break;
+            }
+
+            if meta.fd >= 0 {
+                let target_str = fs::read_link(format!("/proc/self/fd/{}", meta.fd))
+                    .ok()
+                    .map(|p| {
+                        p.to_string_lossy()
+                            .trim_end_matches(" (deleted)")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+
+                let allow = if meta.pid == my_pid || !is_ssh_private_key_path(&target_str) {
+                    true
+                } else {
+                    let (ok, comm, exe, cmdline) = check_pid_git_authorized(meta.pid);
+                    if !ok && !seen_denied.iter().any(|(p, t)| *p == meta.pid && t == &target_str) {
+                        seen_denied.push((meta.pid, target_str.clone()));
+                        alerts.push(FimAlert {
+                            severity: "CRITICAL",
+                            rule_id: "SSH_PRIVATE_KEY_ACCESS_BLOCKED",
+                            path: target_str.clone(),
+                            old_hash: String::new(),
+                            new_hash: String::new(),
+                            actor_pid: Some(meta.pid),
+                            actor_exe: Some(exe.clone()),
+                            summary: format!(
+                                "BLOCKED unauthorized read of SSH private key '{}' by PID {} ({} [{}], cmd='{}') — only git is permitted!",
+                                target_str, meta.pid, comm, exe, cmdline
+                            ),
+                        });
+                    }
+                    ok
+                };
+
+                if (meta.mask & FAN_OPEN_PERM) != 0 {
+                    let resp = FanotifyResponse {
+                        fd: meta.fd,
+                        response: if allow { FAN_ALLOW } else { FAN_DENY },
+                    };
+                    let resp_bytes = unsafe {
+                        std::slice::from_raw_parts(
+                            &resp as *const FanotifyResponse as *const u8,
+                            std::mem::size_of::<FanotifyResponse>(),
+                        )
+                    };
+                    unsafe {
+                        let _ = libc::write(
+                            self.fd,
+                            resp_bytes.as_ptr() as *const libc::c_void,
+                            resp_bytes.len(),
+                        );
+                    }
+                }
+
+                unsafe {
+                    libc::close(meta.fd);
+                }
+            }
+
+            offset += meta.event_len as usize;
+        }
+
+        alerts
+    }
+}
+
+impl Drop for SshKeyGuard {
+    fn drop(&mut self) {
+        if self.fd >= 0 {
+            unsafe {
+                libc::close(self.fd);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,5 +812,36 @@ mod tests {
             sha256_bytes(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
             "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
         );
+    }
+
+    #[test]
+    fn test_ssh_private_key_path_filter() {
+        assert!(is_ssh_private_key_path("/home/serenity/.ssh/id_ed25519"));
+        assert!(is_ssh_private_key_path("/home/serenity/.ssh/id_rsa"));
+        assert!(is_ssh_private_key_path("/root/.ssh/id_ed25519"));
+        assert!(!is_ssh_private_key_path("/home/serenity/.ssh/id_ed25519.pub"));
+        assert!(!is_ssh_private_key_path("/home/serenity/.ssh/known_hosts"));
+        assert!(!is_ssh_private_key_path("/home/serenity/.ssh/known_hosts.old"));
+        assert!(!is_ssh_private_key_path("/home/serenity/.ssh/authorized_keys"));
+        assert!(!is_ssh_private_key_path("/home/serenity/.ssh/config"));
+        assert!(!is_ssh_private_key_path("/home/serenity/.ssh"));
+        assert!(!is_ssh_private_key_path("/etc/passwd"));
+    }
+
+    #[test]
+    fn test_git_authorized_opener() {
+        assert!(is_git_authorized_opener("/usr/bin/git", &[]));
+        assert!(is_git_authorized_opener("/usr/lib/git-core/git-remote-ssh", &[]));
+        assert!(is_git_authorized_opener(
+            "/usr/bin/ssh",
+            &["/bin/sh".to_string(), "/usr/bin/git".to_string()]
+        ));
+        assert!(!is_git_authorized_opener("/usr/bin/ssh", &["/bin/nu".to_string()]));
+        assert!(!is_git_authorized_opener("/bin/cat", &["/bin/bash".to_string()]));
+        assert!(!is_git_authorized_opener(
+            "/bin/cat",
+            &["/usr/bin/git".to_string()]
+        ));
+        assert!(!is_git_authorized_opener("/opt/google/chrome/chrome", &[]));
     }
 }
