@@ -1,0 +1,243 @@
+[package]
+name = "libreoffice"
+version = "26.8.3"
+arch = "x86_64-gnu"
+description = "LibreOffice 26.8 office suite (Writer, Calc, Impress, Draw, Math, Base - Wayland GTK3)"
+deps = ["clibrary"]
+
+[source]
+type = "custom"
+script = """
+URL="https://download.documentfoundation.org/libreoffice/stable/26.8.3/deb/x86_64/LibreOffice_26.8.3_Linux_x86-64_deb.tar.gz"
+EXPECTED_SHA256="e7cd3538e85818ff9dd9bb65386769fde927011242aace5a144989f4000dcabf"
+TAR_PATH="${WORK_DIR}/lo.tar.gz"
+
+echo "  -> Downloading ${URL}..."
+curl -fL --retry 3 "${URL}" -o "${TAR_PATH}"
+
+ACTUAL_SHA256="$(sha256sum "${TAR_PATH}" | awk '{print $1}')"
+if [ "${ACTUAL_SHA256}" != "${EXPECTED_SHA256}" ]; then
+    echo "ERROR: SHA-256 mismatch for ${URL} (expected ${EXPECTED_SHA256}, got ${ACTUAL_SHA256})" >&2
+    exit 1
+fi
+
+UNPACK_DIR="${WORK_DIR}/unpacked"
+mkdir -p "${UNPACK_DIR}"
+tar -xzf "${TAR_PATH}" -C "${UNPACK_DIR}"
+rm -f "${TAR_PATH}"
+
+DEBS_DIR="$(find "${UNPACK_DIR}" -maxdepth 3 -type d -name DEBS | head -n 1)"
+if [ -z "${DEBS_DIR}" ] || [ ! -d "${DEBS_DIR}" ]; then
+    echo "ERROR: DEBS directory not found inside LibreOffice tarball" >&2
+    exit 1
+fi
+
+AR_DIR="${WORK_DIR}/ar"
+mkdir -p "${AR_DIR}"
+for deb in "${DEBS_DIR}"/*.deb; do
+    case "$(basename "${deb}")" in
+        *kde-integration*) continue ;;
+    esac
+    rm -f "${AR_DIR}"/*
+    (cd "${AR_DIR}" && ar x "${deb}")
+    DATA_TAR="$(find "${AR_DIR}" -maxdepth 1 -name 'data.tar.*' | head -n 1)"
+    if [ -n "${DATA_TAR}" ]; then
+        tar -xf "${DATA_TAR}" -C "${STAGE_DIR}"
+    fi
+done
+
+rm -rf "${STAGE_DIR}/usr/local/bin" "${STAGE_DIR}/usr/lib/menu" "${STAGE_DIR}/usr/share/applnk" "${STAGE_DIR}/usr/share/mimelnk"
+rm -f "${STAGE_DIR}"/usr/share/applications/libreoffice*.desktop
+
+mkdir -p "${STAGE_DIR}/usr/share/applications"
+for src_desktop in "${STAGE_DIR}"/opt/libreoffice26.8/share/xdg/*.desktop; do
+    [ -f "${src_desktop}" ] || continue
+    base_name="$(basename "${src_desktop}")"
+    dst_desktop="${STAGE_DIR}/usr/share/applications/libreoffice26.8-${base_name}"
+    sed -e 's|^Exec=libreoffice26[.]8|Exec=/usr/bin/libreoffice|' -e 's|^TryExec=libreoffice26[.]8|TryExec=/usr/bin/libreoffice|' "${src_desktop}" > "${dst_desktop}"
+    chmod 0644 "${dst_desktop}"
+done
+
+# Bundle external non-glibc/non-Mesa shared libraries privately into /opt/libreoffice26.8/lib-extra
+python3 - "${STAGE_DIR}" <<'PY'
+import os
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+stage_dir = Path(sys.argv[1])
+lo_dir = stage_dir / "opt" / "libreoffice26.8"
+prog_dir = lo_dir / "program"
+extra_dir = lo_dir / "lib-extra"
+extra_dir.mkdir(parents=True, exist_ok=True)
+
+skip_lib_prefixes = (
+    "ld-linux-",
+    "libc.so",
+    "libm.so",
+    "libdl.so",
+    "libpthread.so",
+    "librt.so",
+    "libstdc++.so",
+    "libgcc_s.so",
+    "libGL",
+    "libEGL",
+    "libGLES",
+    "libgbm",
+    "libdrm",
+    "libvulkan",
+    "libwayland-",
+)
+
+skip_plugin_substrings = (
+    "qt5",
+    "qt6",
+    "kf5",
+    "kf6",
+    "gtk4",
+    "avmediagst",
+    "postgresql",
+    "odbc",
+    "jdbc",
+    "java",
+    "firebird",
+    "evoab",
+    "ldap",
+    "kde",
+)
+
+prog_names = {p.name for p in prog_dir.iterdir()} if prog_dir.is_dir() else set()
+seed_bins = ["soffice.bin", "oosplash", "unopkg.bin", "gengal.bin"]
+queue = []
+for b in seed_bins:
+    bp = prog_dir / b
+    if bp.is_file():
+        queue.append(bp)
+
+for p in sorted(prog_dir.glob("*.so*")):
+    if p.is_file() and not any(sub in p.name for sub in skip_plugin_substrings):
+        queue.append(p)
+
+ld_env = os.environ.copy()
+ld_env["LD_LIBRARY_PATH"] = f"{prog_dir}:{extra_dir}"
+
+seen = set()
+while queue:
+    cur = queue.pop(0)
+    proc = subprocess.run(["ldd", str(cur)], capture_output=True, text=True, env=ld_env)
+    for line in proc.stdout.splitlines():
+        for tok in line.split():
+            if tok.startswith("/") and (tok.startswith("/usr/lib") or tok.startswith("/lib")):
+                dep = Path(tok)
+                if str(dep).startswith(str(prog_dir)) or str(dep).startswith(str(extra_dir)):
+                    continue
+                name = dep.name
+                if name in prog_names or name.startswith(skip_lib_prefixes):
+                    continue
+                if name in seen or not dep.exists():
+                    continue
+                seen.add(name)
+                dst = extra_dir / name
+                shutil.copy2(dep.resolve(), dst)
+                os.chmod(dst, 0o644)
+                queue.append(dst)
+
+print(f"  -> Bundled {len(seen)} extra shared libraries into {extra_dir}")
+
+# Break any regular-file hardlinks so spkg extracts independent files cleanly.
+unlinked = 0
+for root, _, files in os.walk(stage_dir):
+    for fname in files:
+        fpath = Path(root) / fname
+        try:
+            st = fpath.lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+            mode = stat.S_IMODE(st.st_mode)
+            tmp = fpath.with_name(f"{fname}.dehardlink-tmp")
+            shutil.copyfile(fpath, tmp)
+            os.chmod(tmp, mode)
+            os.replace(tmp, fpath)
+            unlinked += 1
+
+print(f"  -> Converted {unlinked} hardlinked files into independent copies")
+PY
+
+mkdir -p "${STAGE_DIR}/usr/bin"
+ln -sfn libreoffice "${STAGE_DIR}/usr/bin/libreoffice26.8"
+ln -sfn libreoffice "${STAGE_DIR}/usr/bin/soffice"
+
+for req in soffice.bin libvclplug_gtk3lo.so libmergedlo.so libswlo.so libsclo.so libsdlo.so; do
+    req_path="${STAGE_DIR}/opt/libreoffice26.8/program/${req}"
+    test -f "${req_path}"
+    if LD_LIBRARY_PATH="${STAGE_DIR}/opt/libreoffice26.8/program:${STAGE_DIR}/opt/libreoffice26.8/lib-extra" ldd "${req_path}" | grep -q "not found"; then
+        echo "ERROR: Missing shared libraries for ${req}:" >&2
+        LD_LIBRARY_PATH="${STAGE_DIR}/opt/libreoffice26.8/program:${STAGE_DIR}/opt/libreoffice26.8/lib-extra" ldd "${req_path}" | grep "not found" >&2
+        exit 1
+    fi
+done
+
+TEST_PROFILE="${WORK_DIR}/test-profile"
+mkdir -p "${TEST_PROFILE}"
+LD_LIBRARY_PATH="${STAGE_DIR}/opt/libreoffice26.8/lib-extra" "${STAGE_DIR}/opt/libreoffice26.8/program/soffice" --headless "-env:UserInstallation=file://${TEST_PROFILE}" --version
+rm -rf "${TEST_PROFILE}"
+
+desktop_count=0
+for df in "${STAGE_DIR}"/usr/share/applications/libreoffice26.8-*.desktop; do
+    [ -e "${df}" ] || continue
+    if [ -L "${df}" ]; then
+        echo "ERROR: Symlinked .desktop entry found: ${df}" >&2
+        exit 1
+    fi
+    desktop_count=$((desktop_count + 1))
+done
+if [ "${desktop_count}" -lt 6 ]; then
+    echo "ERROR: Expected at least 6 .desktop files, found ${desktop_count}" >&2
+    exit 1
+fi
+echo "  -> Verified ${desktop_count} standalone .desktop entries"
+"""
+
+[install.scripts]
+"usr/bin/libreoffice" = """#!/bin/sh
+if [ -z "${LANG:-}" ] || [ "${LANG}" = "C" ] || [ "${LANG}" = "POSIX" ]; then
+    if [ -d /usr/lib/locale/en_US.utf8 ]; then
+        export LANG="en_US.UTF-8"
+    elif [ -d /usr/lib/locale/C.utf8 ]; then
+        export LANG="C.UTF-8"
+    fi
+fi
+export LD_LIBRARY_PATH="/opt/libreoffice26.8/lib-extra${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export SAL_USE_VCLPLUGIN="${SAL_USE_VCLPLUGIN:-gtk3}"
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    export GDK_BACKEND="${GDK_BACKEND:-wayland}"
+fi
+exec /opt/libreoffice26.8/program/soffice "$@"
+"""
+
+"usr/bin/lowriter" = """#!/bin/sh
+exec /usr/bin/libreoffice --writer "$@"
+"""
+
+"usr/bin/localc" = """#!/bin/sh
+exec /usr/bin/libreoffice --calc "$@"
+"""
+
+"usr/bin/loimpress" = """#!/bin/sh
+exec /usr/bin/libreoffice --impress "$@"
+"""
+
+"usr/bin/lodraw" = """#!/bin/sh
+exec /usr/bin/libreoffice --draw "$@"
+"""
+
+"usr/bin/lomath" = """#!/bin/sh
+exec /usr/bin/libreoffice --math "$@"
+"""
+
+"usr/bin/lobase" = """#!/bin/sh
+exec /usr/bin/libreoffice --base "$@"
+"""

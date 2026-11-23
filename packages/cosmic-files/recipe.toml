@@ -1,6 +1,6 @@
 [package]
 name = "cosmic-files"
-version = "0.1.1"
+version = "0.1.2"
 arch = "x86_64-gnu"
 description = "COSMIC Files native Wayland file manager (Rust + libcosmic) and xdg-open helper"
 deps = ["clibrary"]
@@ -53,6 +53,11 @@ case "$TARGET" in
     *.png|*.PNG|*.jpg|*.JPG|*.jpeg|*.JPEG|*.webp|*.WEBP|*.gif|*.GIF|*.bmp|*.BMP|*.svg|*.SVG|*.tif|*.TIF|*.tiff|*.TIFF|*.ico|*.ICO)
         if [ -x /usr/bin/eog ]; then
             exec /usr/bin/eog "$TARGET"
+        fi
+        ;;
+    *.doc|*.DOC|*.docx|*.DOCX|*.odt|*.ODT|*.rtf|*.RTF|*.xls|*.XLS|*.xlsx|*.XLSX|*.ods|*.ODS|*.csv|*.CSV|*.ppt|*.PPT|*.pptx|*.PPTX|*.odp|*.ODP|*.odg|*.ODG|*.odf|*.ODF)
+        if [ -x /usr/bin/libreoffice ]; then
+            exec /usr/bin/libreoffice "$TARGET"
         fi
         ;;
 esac
