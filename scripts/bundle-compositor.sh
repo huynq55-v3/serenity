@@ -206,6 +206,25 @@ if [ -d /usr/share/zoneinfo ]; then
     cp -a /usr/share/zoneinfo "${TARGET_ROOT}/usr/share/" 2>/dev/null || true
 fi
 
+# Bundle compiled UTF-8 glibc locales + gconv modules so Chromium/Electron/GTK/Steam/coreutils
+# never fall back to 7-bit ASCII "C" locale (which causes SIGTRAP on non-ASCII drag-and-drop).
+for loc in C.utf8 en_US.utf8 vi_VN.utf8; do
+    if [ -d "/usr/lib/locale/${loc}" ]; then
+        mkdir -p "${TARGET_ROOT}/usr/lib/locale"
+        cp -a "/usr/lib/locale/${loc}" "${TARGET_ROOT}/usr/lib/locale/"
+    fi
+done
+for loc_bin in /usr/bin/locale /usr/bin/localedef; do
+    if [ -x "${loc_bin}" ]; then
+        install -m 0755 "${loc_bin}" "${TARGET_ROOT}/usr/bin/$(basename "${loc_bin}")"
+        copy_lib_and_deps "${loc_bin}"
+    fi
+done
+if [ -d /usr/lib/x86_64-linux-gnu/gconv ]; then
+    mkdir -p "${TARGET_ROOT}/usr/lib/x86_64-linux-gnu"
+    cp -a /usr/lib/x86_64-linux-gnu/gconv "${TARGET_ROOT}/usr/lib/x86_64-linux-gnu/"
+fi
+
 # Bundle serenity-sysd (Rust System D-Bus daemon for login1 SetBrightness/PowerOff + UPower)
 SYSD_BIN="${ROOT_DIR}/target/x86_64-unknown-linux-musl/release/serenity-sysd"
 if [ -x "${SYSD_BIN}" ]; then

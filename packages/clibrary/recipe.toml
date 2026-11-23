@@ -1,6 +1,6 @@
 [package]
 name = "clibrary"
-version = "1.0.7"
+version = "1.0.8"
 arch = "x86_64-gnu"
 description = "Common Linux C/C++ runtime libraries (GTK3 + GSettings + Glycin/gdk-pixbuf + MIME, NSS, NSPR, Cairo, Pango, ATK, X11, ALSA, CUPS, Kerberos, GLib) for Chrome, Antigravity & Electron apps"
 deps = []
@@ -15,6 +15,11 @@ extra_paths = [
     "/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache",
     "/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders",
     "/usr/share/mime",
+    "/usr/lib/locale/C.utf8",
+    "/usr/lib/locale/en_US.utf8",
+    "/usr/lib/locale/vi_VN.utf8",
+    "/usr/lib/x86_64-linux-gnu/gconv",
+    "/usr/bin/locale",
 ]
 patterns = [
     # GTK 3 & Secret Service (required by Electron apps: Antigravity, VS Code, Discord)

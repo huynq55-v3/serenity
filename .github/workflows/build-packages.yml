@@ -101,7 +101,7 @@ jobs:
             syslibs)
               sudo apt-get update
               sudo apt-get install -y --no-install-recommends \
-                zstd libgtk-3-0t64 libgtk-3-common gsettings-desktop-schemas shared-mime-info \
+                zstd locales libc-bin libgtk-3-0t64 libgtk-3-common gsettings-desktop-schemas shared-mime-info \
                 libgdk-pixbuf-2.0-0 librsvg2-common bubblewrap \
                 libsecret-1-0 libnotify4 \
                 libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 \
@@ -110,6 +110,9 @@ jobs:
               sudo apt-get install -y --no-install-recommends glycin-loaders || true
               sudo glib-compile-schemas /usr/share/glib-2.0/schemas || true
               sudo update-mime-database /usr/share/mime || true
+              sudo mkdir -p /usr/lib/locale
+              sudo localedef --no-archive -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
+              sudo localedef --no-archive -i vi_VN -c -f UTF-8 -A /usr/share/locale/locale.alias vi_VN.UTF-8
               ;;
             custom)
               if [ "${{ matrix.package }}" = "rust" ]; then
@@ -168,7 +171,10 @@ jobs:
                   libxkbcommon0 libdisplay-info1 libseat1 libpixman-1-0 libdav1d7 \
                   libfontconfig1 libfreetype6 libsystemd0 libpipewire-0.3-0t64 libpulse0 \
                   dbus-daemon dbus-bin seatd network-manager wpasupplicant netplan.io \
-                  dash bash tzdata
+                  dash bash tzdata locales libc-bin
+                sudo mkdir -p /usr/lib/locale
+                sudo localedef --no-archive -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
+                sudo localedef --no-archive -i vi_VN -c -f UTF-8 -A /usr/share/locale/locale.alias vi_VN.UTF-8
                 rustup target add x86_64-unknown-linux-musl
               elif [ "${{ matrix.package }}" = "pop-launcher" ]; then
                 sudo apt-get update

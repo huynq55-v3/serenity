@@ -1,6 +1,6 @@
 [package]
 name = "google-chrome"
-version = "stable-r4"
+version = "stable-r5"
 arch = "x86_64-gnu"
 description = "Google Chrome web browser (repacked from official .deb, Wayland native + full sandbox)"
 deps = ["clibrary"]
@@ -26,6 +26,13 @@ remove = [
 
 [install.scripts]
 "usr/bin/google-chrome" = """#!/bin/sh
+if [ -z "${LANG:-}" ] || [ "${LANG}" = "C" ] || [ "${LANG}" = "POSIX" ]; then
+    if [ -d /usr/lib/locale/en_US.utf8 ]; then
+        export LANG="en_US.UTF-8"
+    elif [ -d /usr/lib/locale/C.utf8 ]; then
+        export LANG="C.UTF-8"
+    fi
+fi
 EXTRA_FLAGS=""
 # Auto-disable GPU compositing only under virtual QEMU virtio-gpu (which lacks dmabuf create_immed);
 # bare-metal GPUs (Intel i915/iris, AMD, etc.) use full hardware acceleration.

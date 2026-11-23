@@ -147,6 +147,18 @@ fn setup_hostname() {
     }
 }
 
+fn select_default_locale_in(locale_dir: &Path) -> &'static str {
+    if locale_dir.join("en_US.utf8").is_dir() {
+        "en_US.UTF-8"
+    } else {
+        "C.UTF-8"
+    }
+}
+
+fn select_default_locale() -> &'static str {
+    select_default_locale_in(Path::new("/usr/lib/locale"))
+}
+
 fn setup_environment() {
     unsafe {
         std::env::set_var("PATH", "/usr/local/bin:/usr/bin:/bin:/sbin");
@@ -154,6 +166,7 @@ fn setup_environment() {
         std::env::set_var("USER", "root");
         std::env::set_var("TERM", "xterm-256color");
         std::env::set_var("XDG_CONFIG_HOME", "/root/.config");
+        std::env::set_var("LANG", select_default_locale());
     }
 }
 
@@ -498,6 +511,10 @@ fn handle_multicall_applet() -> bool {
                 std::env::set_var("XDG_CONFIG_DIRS", "/etc/xdg:/usr/share");
                 if Path::new("/run/seatd.sock").exists() {
                     std::env::set_var("LIBSEAT_BACKEND", "seatd");
+                }
+                let cur_lang = std::env::var("LANG").unwrap_or_default();
+                if cur_lang.is_empty() || cur_lang == "C" || cur_lang == "POSIX" {
+                    std::env::set_var("LANG", select_default_locale());
                 }
             }
             let extra_args: Vec<String> = std::env::args().skip(1).collect();
@@ -927,5 +944,25 @@ fn main() {
                 thread::sleep(Duration::from_secs(3));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::select_default_locale_in;
+    use std::fs;
+
+    #[test]
+    fn selects_en_us_utf8_when_present_and_c_utf8_fallback() {
+        let base = std::env::temp_dir().join(format!("serenity-init-locale-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+
+        assert_eq!(select_default_locale_in(&base), "C.UTF-8");
+
+        fs::create_dir_all(base.join("en_US.utf8")).unwrap();
+        assert_eq!(select_default_locale_in(&base), "en_US.UTF-8");
+
+        let _ = fs::remove_dir_all(&base);
     }
 }

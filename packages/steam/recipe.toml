@@ -1,6 +1,6 @@
 [package]
 name = "steam"
-version = "1.0.4"
+version = "1.0.5"
 arch = "x86_64-gnu"
 description = "Steam gaming client (official deb + Xwayland + lib32 + GNU runtime utilities)"
 deps = ["clibrary", "pipewire", "xwayland", "lib32", "bash"]
@@ -132,6 +132,13 @@ esac
 """
 
 "usr/bin/steam" = """#!/bin/sh
+if [ -z "${LANG:-}" ] || [ "${LANG}" = "C" ] || [ "${LANG}" = "POSIX" ]; then
+    if [ -d /usr/lib/locale/en_US.utf8 ]; then
+        export LANG="en_US.UTF-8"
+    elif [ -d /usr/lib/locale/C.utf8 ]; then
+        export LANG="C.UTF-8"
+    fi
+fi
 export PATH="/usr/bin:/bin:/sbin:/usr/sbin:${PATH}"
 
 if [ -x /sbin/ldconfig ] && [ ! -e /etc/ld.so.cache ]; then
