@@ -1,0 +1,50 @@
+[package]
+name = "uv"
+version = "0.13.9"
+arch = "x86_64-musl"
+description = "uv - Python version manager + fast pip/venv (uv python install 3.12, uv venv --python 3.12)"
+# python: system default interpreter (uv reuses it for --python 3.15).
+# serenity-base >= 0.1.4 ships libutil.so.1 + libcrypt.so.1 needed by uv-managed CPython builds.
+deps = ["python", "serenity-base"]
+
+[source]
+type = "custom"
+script = """
+URL="https://github.com/astral-sh/uv/releases/download/${PKG_VERSION}/uv-x86_64-unknown-linux-musl.tar.gz"
+EXPECTED_SHA256="58ccf5f1792b8a5a88d01bc910ea131a8b3db4a319a17ad5fad75e0845a3e271"
+TAR_PATH="${WORK_DIR}/uv.tar.gz"
+
+echo "  -> Downloading ${URL}..."
+curl -fL --retry 3 "${URL}" -o "${TAR_PATH}"
+
+ACTUAL_SHA256="$(sha256sum "${TAR_PATH}" | awk '{print $1}')"
+if [ "${ACTUAL_SHA256}" != "${EXPECTED_SHA256}" ]; then
+    echo "ERROR: SHA-256 mismatch for ${URL} (expected ${EXPECTED_SHA256}, got ${ACTUAL_SHA256})" >&2
+    exit 1
+fi
+
+tar -xzf "${TAR_PATH}" -C "${WORK_DIR}"
+mkdir -p "${STAGE_DIR}/usr/bin"
+install -m 0755 "${WORK_DIR}/uv-x86_64-unknown-linux-musl/uv" "${STAGE_DIR}/usr/bin/uv"
+install -m 0755 "${WORK_DIR}/uv-x86_64-unknown-linux-musl/uvx" "${STAGE_DIR}/usr/bin/uvx"
+
+# Smoke test: install a second CPython, build a venv on it, run pip inside.
+UV="${STAGE_DIR}/usr/bin/uv"
+"${UV}" --version
+export UV_PYTHON_INSTALL_DIR="${WORK_DIR}/uv-python" UV_CACHE_DIR="${WORK_DIR}/uv-cache" UV_PYTHON_INSTALL_BIN=0
+"${UV}" python install 3.12
+"${UV}" venv --python 3.12 "${WORK_DIR}/venv312"
+"${UV}" pip install --python "${WORK_DIR}/venv312/bin/python" six
+"${WORK_DIR}/venv312/bin/python" -c 'import sys, six, ssl, sqlite3; assert sys.version_info[:2] == (3, 12) and sys.prefix != sys.base_prefix; print("  -> uv venv OK:", sys.version.split()[0], sys.prefix)'
+"${WORK_DIR}/venv312/bin/python" -m ensurepip --version
+rm -rf "${WORK_DIR}/uv-python" "${WORK_DIR}/uv-cache" "${WORK_DIR}/venv312"
+"""
+
+[install.inline]
+"etc/profile.d/uv.sh" = """# `uv python install` puts versioned shims (python3.12, ...) in ~/.local/bin.
+case ":${PATH}:" in
+    *":${HOME}/.local/bin:"*) ;;
+    *) PATH="${HOME}/.local/bin:${PATH}" ;;
+esac
+export PATH
+"""

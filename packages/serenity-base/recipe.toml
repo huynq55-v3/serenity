@@ -2,7 +2,7 @@
 name = "serenity-base"
 # Bump to rebuild in CI (e.g. after changing crates/compositor, crates/shell-ui,
 # crates/sysd or scripts/bundle-compositor.sh, or to pick up Ubuntu security updates).
-version = "0.1.3"
+version = "0.1.4"
 arch = "x86_64-gnu"
 description = "Serenity GNU runtime layer: glibc + ld-linux, Mesa (EGL/GBM/DRI/Vulkan), Wayland/xkb, PipeWire/Pulse libs, dbus, seatd, NetworkManager + wpa_supplicant, dash/bash, zoneinfo, serenity-compositor/login/shell/sysd"
 deps = []
@@ -23,7 +23,8 @@ missing=""
 for f in lib64/ld-linux-x86-64.so.2 bin/sh bin/bash \
          usr/bin/serenity-compositor usr/bin/serenity-sysd \
          usr/bin/dbus-daemon usr/bin/seatd usr/bin/NetworkManager usr/bin/wpa_supplicant usr/bin/nmcli \
-         usr/share/zoneinfo usr/lib/locale/C.utf8 usr/lib/locale/en_US.utf8 usr/lib/x86_64-linux-gnu/gconv; do
+         usr/share/zoneinfo usr/lib/locale/C.utf8 usr/lib/locale/en_US.utf8 usr/lib/x86_64-linux-gnu/gconv \\
+         usr/lib/x86_64-linux-gnu/libutil.so.1 usr/lib/x86_64-linux-gnu/libcrypt.so.1; do
     [ -e "${STAGE_DIR}/${f}" ] || missing="${missing} ${f}"
 done
 [ -e "${STAGE_DIR}/lib/x86_64-linux-gnu/libc.so.6" ] || [ -e "${STAGE_DIR}/usr/lib/x86_64-linux-gnu/libc.so.6" ] || missing="${missing} libc.so.6"
