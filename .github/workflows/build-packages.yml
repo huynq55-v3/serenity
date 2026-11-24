@@ -225,6 +225,9 @@ jobs:
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends zstd curl ca-certificates tar gzip \
                   libc6 ncurses-base ncurses-term
+              elif [ "${{ matrix.package }}" = "ffmpeg" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends zstd curl ca-certificates tar xz-utils binutils
               elif [ "${{ matrix.package }}" = "uv" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends zstd curl ca-certificates tar gzip

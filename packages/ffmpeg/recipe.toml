@@ -1,0 +1,80 @@
+[package]
+name = "ffmpeg"
+version = "9.0.2-62"
+arch = "x86_64-gnu"
+description = "FFmpeg 9.0 (BtbN GPL shared build): ffmpeg, ffprobe, ffplay with x264/x265/vpx/aom/dav1d/opus/..."
+deps = ["serenity-base"]
+
+[source]
+type = "custom"
+script = """
+# Pinned autobuild tag (the rolling `latest` tag is overwritten daily). BtbN prunes old
+# autobuilds, so bump BTBN_TAG/FF_BUILD/sha256 together when rebuilding later.
+BTBN_TAG="autobuild-2026-11-23-12-43"
+FF_BUILD="ffmpeg-n9.0.2-62-gac1c6e003f-linux64-gpl-shared-9.0"
+URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/${BTBN_TAG}/${FF_BUILD}.tar.xz"
+EXPECTED_SHA256="9d9fff09e0614ccca50c777e1c800b6ff21af1043483bf32ade41b5be17cfb2c"
+TAR_PATH="${WORK_DIR}/ffmpeg.tar.xz"
+PREFIX="/opt/ffmpeg"
+DEST="${STAGE_DIR}${PREFIX}"
+
+echo "  -> Downloading ${URL}..."
+curl -fL --retry 3 "${URL}" -o "${TAR_PATH}"
+
+ACTUAL_SHA256="$(sha256sum "${TAR_PATH}" | awk '{print $1}')"
+if [ "${ACTUAL_SHA256}" != "${EXPECTED_SHA256}" ]; then
+    echo "ERROR: SHA-256 mismatch for ${URL} (expected ${EXPECTED_SHA256}, got ${ACTUAL_SHA256})" >&2
+    exit 1
+fi
+
+tar -xJf "${TAR_PATH}" -C "${WORK_DIR}"
+rm -f "${TAR_PATH}"
+SRC="${WORK_DIR}/${FF_BUILD}"
+
+# Runtime only: bin/ + lib/*.so* (binaries find libav* via RPATH $ORIGIN/../lib).
+# libav* stay private under /opt/ffmpeg so they never clash with libs other apps bundle.
+mkdir -p "${DEST}/bin" "${DEST}/lib"
+for b in ffmpeg ffprobe ffplay; do
+    install -m 0755 "${SRC}/bin/${b}" "${DEST}/bin/${b}"
+done
+cp -a "${SRC}"/lib/*.so.* "${DEST}/lib/"
+install -m 0644 "${SRC}/LICENSE.txt" "${DEST}/LICENSE.txt"
+
+mkdir -p "${STAGE_DIR}/usr/bin"
+for b in ffmpeg ffprobe ffplay; do
+    ln -sfn "${PREFIX}/bin/${b}" "${STAGE_DIR}/usr/bin/${b}"
+done
+
+# Every ELF may only need its own libav* or what serenity-base >= 0.1.5 ships (glibc incl. libmvec, libgcc_s).
+allowed=" libc.so.6 libm.so.6 libdl.so.2 librt.so.1 libpthread.so.0 libmvec.so.1 libgcc_s.so.1 ld-linux-x86-64.so.2 "
+for f in "${DEST}"/bin/* "${DEST}"/lib/*.so.*; do
+    [ -L "${f}" ] && continue
+    for need in $(objdump -p "${f}" | awk '/NEEDED/ {print $2}'); do
+        case "${need}" in
+            libav*|libsw*) [ -e "${DEST}/lib/${need}" ] && continue ;;
+        esac
+        case "${allowed}" in
+            *" ${need} "*) continue ;;
+        esac
+        echo "ERROR: $(basename "${f}") needs ${need}, which Serenity does not provide" >&2
+        exit 1
+    done
+done
+
+# Smoke test from the staged tree (resolves via RPATH, not the host's libs).
+FF="${DEST}/bin/ffmpeg"
+"${FF}" -hide_banner -version | head -n 1
+"${DEST}/bin/ffplay" -hide_banner -version | head -n 1
+"${FF}" -hide_banner -loglevel error -y \
+    -f lavfi -i testsrc2=size=640x360:rate=30:duration=2 \
+    -f lavfi -i sine=frequency=440:duration=2 \
+    -c:v libx264 -preset veryfast -c:a aac "${WORK_DIR}/t.mp4"
+"${FF}" -hide_banner -loglevel error -y -i "${WORK_DIR}/t.mp4" -t 1 -an -c:v libvpx-vp9 -b:v 0 -crf 40 "${WORK_DIR}/t.webm"
+PROBE="$("${DEST}/bin/ffprobe" -v error -show_entries stream=codec_name -of csv=p=0 "${WORK_DIR}/t.mp4" | tr '\\n' ' ')"
+echo "  -> ffprobe streams: ${PROBE}"
+case "${PROBE}" in
+    *h264*aac*) ;;
+    *) echo "ERROR: unexpected ffprobe output: ${PROBE}" >&2; exit 1 ;;
+esac
+rm -f "${WORK_DIR}/t.mp4" "${WORK_DIR}/t.webm"
+"""
