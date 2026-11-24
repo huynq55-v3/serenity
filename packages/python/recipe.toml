@@ -1,0 +1,88 @@
+[package]
+name = "python"
+version = "3.15.2"
+arch = "x86_64-gnu"
+description = "CPython 3.15 (python-build-standalone) with pip, venv/ensurepip, ssl, sqlite3, tkinter - python3 -m venv ready"
+deps = ["clibrary"]
+
+[source]
+type = "custom"
+script = """
+PBS_TAG="20261123"
+PY_MINOR="${PKG_VERSION%.*}"
+URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/cpython-${PKG_VERSION}+${PBS_TAG}-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+EXPECTED_SHA256="c13943cea39c918690c07067d30a44d7525fc630525e618548f2262b712511bf"
+TAR_PATH="${WORK_DIR}/cpython.tar.gz"
+PREFIX="/opt/python${PY_MINOR}"
+DEST="${STAGE_DIR}${PREFIX}"
+
+echo "  -> Downloading ${URL}..."
+curl -fL --retry 3 "${URL}" -o "${TAR_PATH}"
+
+ACTUAL_SHA256="$(sha256sum "${TAR_PATH}" | awk '{print $1}')"
+if [ "${ACTUAL_SHA256}" != "${EXPECTED_SHA256}" ]; then
+    echo "ERROR: SHA-256 mismatch for ${URL} (expected ${EXPECTED_SHA256}, got ${ACTUAL_SHA256})" >&2
+    exit 1
+fi
+
+UNPACK_DIR="${WORK_DIR}/unpacked"
+mkdir -p "${UNPACK_DIR}"
+tar -xzf "${TAR_PATH}" -C "${UNPACK_DIR}"
+rm -f "${TAR_PATH}"
+test -x "${UNPACK_DIR}/python/bin/python${PY_MINOR}"
+
+mkdir -p "$(dirname "${DEST}")"
+mv "${UNPACK_DIR}/python" "${DEST}"
+
+# Drop test suites & bytecode caches to keep the package small.
+rm -rf "${DEST}/lib/python${PY_MINOR}/test" "${DEST}/lib/python${PY_MINOR}/idlelib/idle_test"
+find "${DEST}" -type d -name __pycache__ -prune -exec rm -rf {} +
+
+# pip.conf: trust the system CA bundle (bundled OpenSSL may not know distro cert paths).
+cat > "${DEST}/pip.conf" <<'EOF'
+[global]
+cert = /etc/ssl/certs/ca-certificates.crt
+EOF
+
+# Real symlinks (not shell wrappers) so venv records a resolvable base interpreter.
+mkdir -p "${STAGE_DIR}/usr/bin"
+ln -sfn "${PREFIX}/bin/python${PY_MINOR}" "${STAGE_DIR}/usr/bin/python${PY_MINOR}"
+ln -sfn "python${PY_MINOR}" "${STAGE_DIR}/usr/bin/python3"
+ln -sfn "python3" "${STAGE_DIR}/usr/bin/python"
+ln -sfn "${PREFIX}/bin/pip${PY_MINOR}" "${STAGE_DIR}/usr/bin/pip${PY_MINOR}"
+ln -sfn "pip${PY_MINOR}" "${STAGE_DIR}/usr/bin/pip3"
+ln -sfn "pip3" "${STAGE_DIR}/usr/bin/pip"
+
+# Smoke test: core extension modules + creating a venv with pip inside it.
+PY="${DEST}/bin/python${PY_MINOR}"
+"${PY}" --version
+"${PY}" -c 'import ssl, sqlite3, ctypes, zlib, lzma, bz2, hashlib, json, venv, ensurepip; print("  -> stdlib OK,", ssl.OPENSSL_VERSION)'
+TEST_VENV="${WORK_DIR}/test-venv"
+"${PY}" -m venv "${TEST_VENV}"
+"${TEST_VENV}/bin/python" -m pip --version
+"${TEST_VENV}/bin/python" -c 'import sys; assert sys.prefix != sys.base_prefix, "not inside venv"; print("  -> venv OK:", sys.prefix)'
+rm -rf "${TEST_VENV}"
+find "${DEST}" -type d -name __pycache__ -prune -exec rm -rf {} +
+"""
+
+[install.inline]
+"etc/profile.d/python.sh" = """export SSL_CERT_FILE="${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}"
+export PIP_CERT="${PIP_CERT:-/etc/ssl/certs/ca-certificates.crt}"
+# Activated venv wins over the system interpreter automatically via PATH (bin/activate).
+"""
+
+[install.scripts]
+"usr/bin/virtualenv" = """#!/bin/sh
+# Minimal 'virtualenv' compatible entry point backed by the stdlib venv module.
+#   virtualenv .venv            -> python3 -m venv .venv
+#   virtualenv -p python3.15 x  -> chosen interpreter
+PY=python3
+if [ "${1:-}" = "-p" ] || [ "${1:-}" = "--python" ]; then
+    PY="$2"
+    shift 2
+fi
+if [ "$#" -eq 0 ]; then
+    set -- .venv
+fi
+exec "${PY}" -m venv "$@"
+"""
