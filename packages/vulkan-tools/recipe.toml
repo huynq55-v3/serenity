@@ -1,0 +1,102 @@
+[package]
+name = "vulkan-tools"
+version = "1.3.275-r1"
+arch = "x86_64-gnu"
+description = "Vulkan diagnostic and verification utilities (vulkaninfo, vkcube)"
+deps = ["serenity-base", "clibrary"]
+
+[source]
+type = "custom"
+script = '''
+mkdir -p "${STAGE_DIR}/usr/lib/vulkan-tools/bin" "${STAGE_DIR}/usr/lib/vulkan-tools/lib" "${STAGE_DIR}/usr/bin"
+
+for tool in vulkaninfo vkcube; do
+    TOOL_BIN="$(command -v "${tool}" || true)"
+    if [ -z "${TOOL_BIN}" ] || [ ! -x "${TOOL_BIN}" ]; then
+        echo "ERROR: ${tool} not found on build host (install vulkan-tools)" >&2
+        exit 1
+    fi
+    cp -L "${TOOL_BIN}" "${STAGE_DIR}/usr/lib/vulkan-tools/bin/${tool}"
+    chmod 0755 "${STAGE_DIR}/usr/lib/vulkan-tools/bin/${tool}"
+done
+
+VKCUBE_WL="$(command -v vkcube-wayland || true)"
+if [ -n "${VKCUBE_WL}" ] && [ -x "${VKCUBE_WL}" ]; then
+    cp -L "${VKCUBE_WL}" "${STAGE_DIR}/usr/lib/vulkan-tools/bin/vkcube-wayland"
+    chmod 0755 "${STAGE_DIR}/usr/lib/vulkan-tools/bin/vkcube-wayland"
+    cat > "${STAGE_DIR}/usr/bin/vkcube-wayland" <<'EOF'
+#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/vulkan-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/vulkan-tools/bin/vkcube-wayland "$@"
+EOF
+    chmod 0755 "${STAGE_DIR}/usr/bin/vkcube-wayland"
+fi
+
+# Bundle non-glibc, non-GPU-driver shared libraries privately into /usr/lib/vulkan-tools/lib
+python3 - "${STAGE_DIR}/usr/lib/vulkan-tools/bin" "${STAGE_DIR}/usr/lib/vulkan-tools/lib" <<'PY'
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+bin_dir = Path(sys.argv[1])
+lib_dir = Path(sys.argv[2])
+lib_dir.mkdir(parents=True, exist_ok=True)
+skip = (
+    "ld-linux-",
+    "libc.so",
+    "libm.so",
+    "libdl.so",
+    "libpthread.so",
+    "librt.so",
+    "libutil.so",
+    "libcrypt.so",
+    "libmvec.so",
+    "libvulkan.so",
+    "libdrm",
+    "libEGL",
+    "libGL",
+    "libgbm",
+    "libgallium",
+    "libwayland-",
+)
+
+seen = set()
+queue = [p for p in sorted(bin_dir.iterdir()) if p.is_file()]
+
+while queue:
+    cur = queue.pop(0)
+    proc = subprocess.run(["ldd", str(cur)], capture_output=True, text=True)
+    for line in proc.stdout.splitlines():
+        for tok in line.split():
+            if tok.startswith("/") and (tok.startswith("/usr/lib") or tok.startswith("/lib")):
+                dep = Path(tok)
+                name = dep.name
+                if name.startswith(skip) or name in seen or not dep.exists():
+                    continue
+                seen.add(name)
+                dst = lib_dir / name
+                shutil.copy2(dep.resolve(), dst)
+                os.chmod(dst, 0o644)
+                queue.append(dst)
+
+print(f"  -> Bundled {len(seen)} shared libraries into {lib_dir}")
+PY
+
+# Smoke test staged binaries
+LD_LIBRARY_PATH="${STAGE_DIR}/usr/lib/vulkan-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    "${STAGE_DIR}/usr/lib/vulkan-tools/bin/vulkaninfo" --help >/dev/null
+ldd "${STAGE_DIR}/usr/lib/vulkan-tools/bin/vulkaninfo"
+'''
+
+[install.scripts]
+"usr/bin/vulkaninfo" = '''#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/vulkan-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/vulkan-tools/bin/vulkaninfo "$@"
+'''
+
+"usr/bin/vkcube" = '''#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/vulkan-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/vulkan-tools/bin/vkcube "$@"
+'''

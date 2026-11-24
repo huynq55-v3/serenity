@@ -1,0 +1,376 @@
+[package]
+name = "reims-vgpu"
+version = "0.1.0-r1"
+arch = "x86_64-gnu"
+description = "Reims vGPU macOS VM stack (reims-ctl, reims-util, patched QEMU with apple-gfx/Metal-to-Vulkan, and host setup helper)"
+deps = ["serenity-base", "clibrary", "pipewire", "ovmf", "vulkan-tools"]
+
+[source]
+type = "custom"
+script = '''
+REIMS_SRC="${WORK_DIR}/reims-vgpu"
+UTIL_SRC="${WORK_DIR}/reims-util"
+QEMU_BUILD="${WORK_DIR}/qemu-build"
+VGPU_TARGET="${WORK_DIR}/target"
+CTL_TARGET="${WORK_DIR}/ctl-target"
+UTIL_TARGET="${WORK_DIR}/util-target"
+
+echo "  -> Cloning steelbrain/reims-vgpu..."
+git clone --depth 1 https://github.com/steelbrain/reims-vgpu.git "${REIMS_SRC}"
+
+echo "  -> Initializing vendor/qemu submodule..."
+git -C "${REIMS_SRC}" submodule update --init --depth 1 vendor/qemu || \
+    git -C "${REIMS_SRC}" submodule update --init vendor/qemu
+
+RUSTUP_TOOLCHAIN="$(python3 - "${REIMS_SRC}/rust-toolchain.toml" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    data = tomllib.load(f)
+chan = data.get("toolchain", {}).get("channel", "").strip()
+if not chan:
+    raise SystemExit("ERROR: missing toolchain.channel in rust-toolchain.toml")
+print(chan)
+PY
+)"
+export RUSTUP_TOOLCHAIN
+echo "  -> Installing pinned Rust toolchain (${RUSTUP_TOOLCHAIN})..."
+rustup toolchain install "${RUSTUP_TOOLCHAIN}" --profile minimal
+
+UTIL_REV="$(python3 - "${REIMS_SRC}/crates/reims-ctl/src/reims_util.rs" <<'PY'
+import re, sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+m = re.search(r'pub\s+const\s+REV\s*:\s*&str\s*=\s*"([0-9a-f]{40})"', text)
+if not m:
+    raise SystemExit("ERROR: no 40-hex REV found in crates/reims-ctl/src/reims_util.rs")
+print(m.group(1))
+PY
+)"
+echo "  -> Cloning steelbrain/reims-util at ${UTIL_REV}..."
+git clone https://github.com/steelbrain/reims-util.git "${UTIL_SRC}"
+git -C "${UTIL_SRC}" checkout --detach "${UTIL_REV}"
+
+echo "  -> Building reims-vgpu host Vulkan library (cargo xtask dist --platform vulkan)..."
+(
+    cd "${REIMS_SRC}"
+    CARGO_TARGET_DIR="${VGPU_TARGET}" cargo xtask dist --platform vulkan
+)
+test -f "${VGPU_TARGET}/dist-vulkan/lib/pkgconfig/reims-vgpu.pc"
+test -x "${VGPU_TARGET}/dist-vulkan/bin/reims-vgpu-compile"
+
+echo "  -> Configuring and building patched QEMU..."
+mkdir -p "${QEMU_BUILD}"
+(
+    cd "${QEMU_BUILD}"
+    PKG_CONFIG_PATH="${VGPU_TARGET}/dist-vulkan/lib/pkgconfig" \
+        "${REIMS_SRC}/vendor/qemu/configure" \
+        --prefix=/usr/lib/reims-ctl/qemu \
+        --target-list=x86_64-softmmu \
+        --enable-kvm \
+        --disable-sdl \
+        --enable-gtk \
+        --enable-slirp \
+        --enable-libusb \
+        --enable-spice \
+        --enable-gnutls \
+        --enable-reims-vgpu \
+        --disable-docs \
+        --disable-tests \
+        --disable-werror
+    ninja
+)
+DESTDIR="${STAGE_DIR}" ninja -C "${QEMU_BUILD}" install >/dev/null
+
+echo "  -> Building reims-ctl..."
+(
+    cd "${REIMS_SRC}"
+    CARGO_TARGET_DIR="${CTL_TARGET}" \
+        cargo build --release --locked --manifest-path "${REIMS_SRC}/crates/reims-ctl/Cargo.toml"
+)
+
+echo "  -> Building reims-util..."
+(
+    cd "${REIMS_SRC}"
+    CARGO_TARGET_DIR="${UTIL_TARGET}" \
+        cargo build --release --locked --manifest-path "${UTIL_SRC}/Cargo.toml"
+)
+
+QEMU_PREFIX="${STAGE_DIR}/usr/lib/reims-ctl/qemu"
+install -m 0755 "${VGPU_TARGET}/dist-vulkan/bin/reims-vgpu-compile" "${QEMU_PREFIX}/bin/reims-vgpu-compile"
+test -x "${QEMU_PREFIX}/bin/qemu-system-x86_64"
+test -x "${QEMU_PREFIX}/bin/qemu-img"
+test -x "${QEMU_PREFIX}/bin/reims-vgpu-compile"
+
+mv "${QEMU_PREFIX}/bin/qemu-system-x86_64" "${QEMU_PREFIX}/bin/qemu-system-x86_64.real"
+mv "${QEMU_PREFIX}/bin/qemu-img" "${QEMU_PREFIX}/bin/qemu-img.real"
+
+mkdir -p "${STAGE_DIR}/usr/lib/reims-ctl/bin" "${STAGE_DIR}/usr/lib/reims-ctl/lib/libdecor/plugins-1" "${STAGE_DIR}/usr/bin"
+install -m 0755 "${CTL_TARGET}/release/reims-ctl" "${STAGE_DIR}/usr/lib/reims-ctl/bin/reims-ctl"
+install -m 0755 "${UTIL_TARGET}/release/reims-util" "${STAGE_DIR}/usr/lib/reims-ctl/bin/reims-util"
+
+ln -sfn /usr/lib/reims-ctl/qemu/bin/qemu-system-x86_64 "${STAGE_DIR}/usr/bin/reims-qemu"
+ln -sfn /usr/lib/reims-ctl/qemu/bin/qemu-img "${STAGE_DIR}/usr/bin/reims-qemu-img"
+
+LIC_DIR="${STAGE_DIR}/usr/share/licenses/reims-vgpu"
+mkdir -p "${LIC_DIR}"
+[ -f "${REIMS_SRC}/LICENSE" ] && cp -a "${REIMS_SRC}/LICENSE" "${LIC_DIR}/"
+if [ -d "${REIMS_SRC}/LICENSES" ]; then
+    cp -a "${REIMS_SRC}/LICENSES/"*.txt "${LIC_DIR}/" 2>/dev/null || true
+fi
+[ -f "${REIMS_SRC}/vendor/qemu/COPYING" ] && cp -a "${REIMS_SRC}/vendor/qemu/COPYING" "${LIC_DIR}/QEMU-COPYING"
+[ -f "${UTIL_SRC}/LICENSE" ] && cp -a "${UTIL_SRC}/LICENSE" "${LIC_DIR}/reims-util-LICENSE"
+
+# Bundle non-glibc, non-base-GPU shared libraries privately into /usr/lib/reims-ctl/lib
+python3 - "${STAGE_DIR}" <<'PY'
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+stage = Path(sys.argv[1])
+lib_dir = stage / "usr/lib/reims-ctl/lib"
+plugin_dst = lib_dir / "libdecor/plugins-1"
+lib_dir.mkdir(parents=True, exist_ok=True)
+plugin_dst.mkdir(parents=True, exist_ok=True)
+
+skip = (
+    "ld-linux-",
+    "libc.so",
+    "libm.so",
+    "libdl.so",
+    "libpthread.so",
+    "librt.so",
+    "libutil.so",
+    "libcrypt.so",
+    "libmvec.so",
+    "libvulkan.so",
+    "libdrm",
+    "libEGL",
+    "libGL",
+    "libgbm",
+    "libgallium",
+    "libwayland-",
+    "libpipewire-0.3.so",
+)
+
+seen = set()
+queue = []
+
+for bin_path in [
+    stage / "usr/lib/reims-ctl/qemu/bin/qemu-system-x86_64.real",
+    stage / "usr/lib/reims-ctl/qemu/bin/qemu-img.real",
+    stage / "usr/lib/reims-ctl/qemu/bin/reims-vgpu-compile",
+    stage / "usr/lib/reims-ctl/bin/reims-ctl",
+    stage / "usr/lib/reims-ctl/bin/reims-util",
+]:
+    if bin_path.is_file():
+        queue.append(bin_path)
+
+qemu_root = stage / "usr/lib/reims-ctl/qemu"
+for so_path in sorted(qemu_root.rglob("*.so*")):
+    if so_path.is_file() and not so_path.is_symlink():
+        queue.append(so_path)
+
+sys_libdir = Path("/usr/lib/x86_64-linux-gnu")
+for seed_name in ("libdecor-0.so.0", "libXss.so.1"):
+    seed = sys_libdir / seed_name
+    if seed.exists():
+        dst = lib_dir / seed_name
+        shutil.copy2(seed.resolve(), dst)
+        os.chmod(dst, 0o644)
+        seen.add(seed_name)
+        queue.append(dst)
+
+host_plugins = sys_libdir / "libdecor/plugins-1"
+if host_plugins.is_dir():
+    for plugin in sorted(host_plugins.glob("*.so")):
+        if plugin.exists():
+            dst = plugin_dst / plugin.name
+            shutil.copy2(plugin.resolve(), dst)
+            os.chmod(dst, 0o644)
+            queue.append(dst)
+
+while queue:
+    cur = queue.pop(0)
+    proc = subprocess.run(["ldd", str(cur)], capture_output=True, text=True)
+    for line in proc.stdout.splitlines():
+        for tok in line.split():
+            if tok.startswith("/") and (tok.startswith("/usr/lib") or tok.startswith("/lib")):
+                dep = Path(tok)
+                name = dep.name
+                if name.startswith(skip) or name in seen or not dep.exists():
+                    continue
+                seen.add(name)
+                dst = lib_dir / name
+                shutil.copy2(dep.resolve(), dst)
+                os.chmod(dst, 0o644)
+                queue.append(dst)
+
+print(f"  -> Bundled {len(seen)} shared libraries into {lib_dir}")
+PY
+
+# Verify critical SDL3/QEMU runtime libs and libdecor plugins were bundled
+test -f "${STAGE_DIR}/usr/lib/reims-ctl/lib/libslirp.so.0"
+test -f "${STAGE_DIR}/usr/lib/reims-ctl/lib/libdecor-0.so.0"
+compgen -G "${STAGE_DIR}/usr/lib/reims-ctl/lib/libdecor/plugins-1/*.so" >/dev/null
+
+# Free large temporary build directories before smoke-testing and packing .tar.zst
+rm -rf "${QEMU_BUILD}" "${VGPU_TARGET}" "${CTL_TARGET}" "${UTIL_TARGET}"
+
+# Smoke tests on staged binaries
+export LD_LIBRARY_PATH="${STAGE_DIR}/usr/lib/reims-ctl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LIBDECOR_PLUGIN_DIR="${STAGE_DIR}/usr/lib/reims-ctl/lib/libdecor/plugins-1"
+
+"${STAGE_DIR}/usr/lib/reims-ctl/qemu/bin/qemu-system-x86_64.real" --version
+DEV_HELP="$("${STAGE_DIR}/usr/lib/reims-ctl/qemu/bin/qemu-system-x86_64.real" -device help)"
+grep -q '"reims-graphics-pci"' <<< "${DEV_HELP}"
+AUDIO_HELP="$("${STAGE_DIR}/usr/lib/reims-ctl/qemu/bin/qemu-system-x86_64.real" -audiodev help)"
+grep -qiE "pipewire|pa" <<< "${AUDIO_HELP}"
+"${STAGE_DIR}/usr/lib/reims-ctl/bin/reims-ctl" --help >/dev/null
+"${STAGE_DIR}/usr/lib/reims-ctl/bin/reims-util" --help >/dev/null
+'''
+
+[install.scripts]
+"usr/lib/reims-ctl/qemu/bin/qemu-system-x86_64" = '''#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/reims-ctl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LIBDECOR_PLUGIN_DIR="/usr/lib/reims-ctl/lib/libdecor/plugins-1"
+exec /usr/lib/reims-ctl/qemu/bin/qemu-system-x86_64.real "$@"
+'''
+
+"usr/lib/reims-ctl/qemu/bin/qemu-img" = '''#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/reims-ctl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/reims-ctl/qemu/bin/qemu-img.real "$@"
+'''
+
+"usr/bin/reims-ctl" = '''#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/reims-ctl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LIBDECOR_PLUGIN_DIR="/usr/lib/reims-ctl/lib/libdecor/plugins-1"
+: "${REIMS_CTL_QEMU:=/usr/lib/reims-ctl/qemu/bin/qemu-system-x86_64}"
+export REIMS_CTL_QEMU
+exec /usr/lib/reims-ctl/bin/reims-ctl "$@"
+'''
+
+"usr/bin/reims-util" = '''#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/reims-ctl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/lib/reims-ctl/bin/reims-util "$@"
+'''
+
+"usr/bin/reims-vm-setup" = '''#!/bin/sh
+set -eu
+
+print_status() {
+    echo "=== Serenity Reims vGPU Host Status ==="
+    for dev in /dev/kvm /dev/udmabuf /dev/dri/renderD128; do
+        if [ -e "${dev}" ]; then
+            rw="no"
+            if [ -r "${dev}" ] && [ -w "${dev}" ]; then
+                rw="yes"
+            fi
+            perms="$(ls -l "${dev}" | awk '{print $1, $3 ":" $4}')"
+            echo "  ${dev}: present (${perms}, current user rw=${rw})"
+        else
+            echo "  ${dev}: MISSING"
+        fi
+    done
+    if [ -r /proc/sys/vm/max_map_count ]; then
+        cur_map="$(cat /proc/sys/vm/max_map_count)"
+        echo "  vm.max_map_count: ${cur_map} (recommended >= 2097152)"
+    else
+        echo "  vm.max_map_count: unavailable"
+    fi
+    if [ -r /sys/kernel/mm/lru_gen/min_ttl_ms ]; then
+        cur_ttl="$(cat /sys/kernel/mm/lru_gen/min_ttl_ms)"
+        echo "  lru_gen/min_ttl_ms: ${cur_ttl} (recommended 0)"
+    fi
+}
+
+case "${1:-apply}" in
+    status|--check|-s)
+        print_status
+        exit 0
+        ;;
+    -h|--help|help)
+        echo "Usage: reims-vm-setup [apply|status|--check]"
+        echo "Prepares /dev/kvm, /dev/udmabuf (group video=44, mode 0660) and vm.max_map_count on Serenity Linux."
+        exit 0
+        ;;
+    apply)
+        ;;
+    *)
+        echo "Usage: reims-vm-setup [apply|status|--check]" >&2
+        exit 1
+        ;;
+esac
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "reims-vm-setup: root required; run: sudo reims-vm-setup" >&2
+    exit 1
+fi
+
+MODPROBE=""
+if [ -x /sbin/modprobe ]; then
+    MODPROBE="/sbin/modprobe"
+elif command -v modprobe >/dev/null 2>&1; then
+    MODPROBE="$(command -v modprobe)"
+fi
+
+if [ -n "${MODPROBE}" ]; then
+    if [ ! -e /dev/kvm ]; then
+        "${MODPROBE}" kvm 2>/dev/null || true
+        if grep -qw vmx /proc/cpuinfo 2>/dev/null; then
+            "${MODPROBE}" kvm_intel 2>/dev/null || true
+        elif grep -qw svm /proc/cpuinfo 2>/dev/null; then
+            "${MODPROBE}" kvm_amd 2>/dev/null || true
+        fi
+    fi
+    if [ ! -e /dev/udmabuf ]; then
+        "${MODPROBE}" udmabuf 2>/dev/null || true
+    fi
+fi
+
+missing=0
+for dev in /dev/kvm /dev/udmabuf; do
+    if [ -e "${dev}" ]; then
+        chown 0:44 "${dev}"
+        chmod 0660 "${dev}"
+    else
+        echo "WARNING: ${dev} not found (ensure kernel support/module is available)." >&2
+        missing=1
+    fi
+done
+
+if [ -w /proc/sys/vm/max_map_count ]; then
+    cur_map="$(cat /proc/sys/vm/max_map_count 2>/dev/null || echo 0)"
+    if [ "${cur_map}" -lt 2097152 ] 2>/dev/null; then
+        echo 2097152 > /proc/sys/vm/max_map_count
+    fi
+else
+    echo "WARNING: cannot write /proc/sys/vm/max_map_count" >&2
+fi
+
+if [ -w /sys/kernel/mm/lru_gen/min_ttl_ms ]; then
+    cur_ttl="$(cat /sys/kernel/mm/lru_gen/min_ttl_ms 2>/dev/null || echo 0)"
+    if [ "${cur_ttl}" -gt 0 ] 2>/dev/null; then
+        echo 0 > /sys/kernel/mm/lru_gen/min_ttl_ms
+    fi
+fi
+
+print_status
+if [ "${missing}" -ne 0 ]; then
+    exit 1
+fi
+'''
+
+[install.inline]
+"usr/share/applications/reims-ctl.desktop" = '''[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Reims macOS VM Manager
+GenericName=macOS Virtual Machine Manager
+Comment=Create and run GPU-accelerated macOS VMs via Reims vGPU + QEMU/KVM
+Exec=alacritty --title "Reims macOS VM Manager" -e /usr/bin/reims-ctl
+Icon=utilities-terminal
+Terminal=false
+Categories=System;Emulator;
+'''

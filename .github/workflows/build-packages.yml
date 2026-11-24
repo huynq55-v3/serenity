@@ -231,6 +231,30 @@ jobs:
               elif [ "${{ matrix.package }}" = "uv" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends zstd curl ca-certificates tar gzip
+              elif [ "${{ matrix.package }}" = "ovmf" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends zstd ovmf
+              elif [ "${{ matrix.package }}" = "vulkan-tools" ]; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends zstd vulkan-tools libvulkan1
+              elif [ "${{ matrix.package }}" = "reims-vgpu" ]; then
+                # Building QEMU + Reims vGPU (Rust + SDL3 + metal2vulkan) needs generous disk space: drop unused SDKs first.
+                sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+                df -h /
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends \
+                  zstd git curl ca-certificates build-essential \
+                  python3 python3-venv meson ninja-build pkg-config \
+                  flex bison bzip2 cmake clang lld binutils device-tree-compiler libfdt-dev \
+                  libglib2.0-dev libpixman-1-dev libslirp-dev zlib1g-dev \
+                  libpipewire-0.3-dev libpulse-dev libasound2-dev libusb-1.0-0-dev \
+                  libspice-server-dev libgnutls28-dev libgtk-3-dev \
+                  libvulkan-dev libvulkan1 libdrm-dev libgbm-dev libegl-dev libgles-dev libgl-dev \
+                  libxkbcommon-dev libwayland-dev libwayland-bin wayland-protocols \
+                  libdecor-0-dev libdecor-0-plugin-1-cairo \
+                  libdbus-1-dev libudev-dev libsystemd-dev \
+                  libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+                  libxi-dev libxfixes-dev libxss-dev libxtst-dev
               else
                 command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
               fi

@@ -1,0 +1,51 @@
+[package]
+name = "ovmf"
+version = "2024.02-r1"
+arch = "any"
+description = "Tianocore OVMF UEFI firmware images (OVMF_CODE/OVMF_VARS) for QEMU x86_64 VMs"
+deps = []
+
+[source]
+type = "custom"
+script = '''
+if [ ! -d /usr/share/OVMF ]; then
+    echo "ERROR: /usr/share/OVMF not found on build host (install ovmf)" >&2
+    exit 1
+fi
+
+mkdir -p "${STAGE_DIR}/usr/share"
+cp -a /usr/share/OVMF "${STAGE_DIR}/usr/share/"
+
+if [ -d /usr/share/ovmf ]; then
+    cp -a /usr/share/ovmf "${STAGE_DIR}/usr/share/"
+fi
+
+if [ -e /usr/share/qemu/OVMF.fd ]; then
+    mkdir -p "${STAGE_DIR}/usr/share/qemu"
+    cp -aL /usr/share/qemu/OVMF.fd "${STAGE_DIR}/usr/share/qemu/OVMF.fd"
+fi
+
+# Ensure symlinks inside /usr/share/OVMF that point outside staged paths are materialized
+find "${STAGE_DIR}/usr/share/OVMF" -type l | while read -r link_path; do
+    target="$(readlink "${link_path}")"
+    case "${target}" in
+        /*)
+            if [ ! -e "${STAGE_DIR}${target}" ] && [ -e "${target}" ]; then
+                rm -f "${link_path}"
+                cp -L "${target}" "${link_path}"
+            fi
+            ;;
+    esac
+done
+
+OVMF_DIR="${STAGE_DIR}/usr/share/OVMF"
+if [ -s "${OVMF_DIR}/OVMF_CODE_4M.fd" ] && [ -s "${OVMF_DIR}/OVMF_VARS_4M.fd" ]; then
+    echo "  -> Verified OVMF_CODE_4M.fd and OVMF_VARS_4M.fd"
+elif [ -s "${OVMF_DIR}/OVMF_CODE.fd" ]; then
+    echo "  -> Verified OVMF_CODE.fd"
+else
+    echo "ERROR: Expected OVMF_CODE_4M.fd + OVMF_VARS_4M.fd (or OVMF_CODE.fd) in ${OVMF_DIR}" >&2
+    ls -la "${OVMF_DIR}" >&2
+    exit 1
+fi
+'''
