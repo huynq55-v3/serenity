@@ -84,10 +84,18 @@ while queue:
 print(f"  -> Bundled {len(seen)} shared libraries into {lib_dir}")
 PY
 
-# Smoke test staged binaries
-LD_LIBRARY_PATH="${STAGE_DIR}/usr/lib/vulkan-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    "${STAGE_DIR}/usr/lib/vulkan-tools/bin/vulkaninfo" --help >/dev/null
-ldd "${STAGE_DIR}/usr/lib/vulkan-tools/bin/vulkaninfo"
+# Smoke test staged binaries (vulkaninfo --help exits 1 in Vulkan-Tools 1.3.x, so check output + ldd)
+export LD_LIBRARY_PATH="${STAGE_DIR}/usr/lib/vulkan-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+for b in "${STAGE_DIR}/usr/lib/vulkan-tools/bin/"*; do
+    LDD_OUT="$(ldd "${b}")"
+    if grep -q "not found" <<< "${LDD_OUT}"; then
+        echo "ERROR: unresolved shared library in ${b}:" >&2
+        echo "${LDD_OUT}" >&2
+        exit 1
+    fi
+done
+HELP_OUT="$("${STAGE_DIR}/usr/lib/vulkan-tools/bin/vulkaninfo" --help 2>&1 || true)"
+grep -qi "vulkaninfo" <<< "${HELP_OUT}"
 '''
 
 [install.scripts]
