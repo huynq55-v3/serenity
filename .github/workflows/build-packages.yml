@@ -223,7 +223,8 @@ jobs:
                   libgl1 libegl1 libnss3 libnspr4 libxslt1.1 libxml2 libkrb5-3 libgssapi-krb5-2
               elif [ "${{ matrix.package }}" = "python" ]; then
                 sudo apt-get update
-                sudo apt-get install -y --no-install-recommends zstd curl ca-certificates tar gzip
+                sudo apt-get install -y --no-install-recommends zstd curl ca-certificates tar gzip \
+                  libc6 ncurses-base ncurses-term
               else
                 command -v zstd >/dev/null && command -v git >/dev/null || (sudo apt-get update && sudo apt-get install -y zstd git)
               fi

@@ -11,7 +11,7 @@ script = """
 PBS_TAG="20261123"
 PY_MINOR="${PKG_VERSION%.*}"
 URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/cpython-${PKG_VERSION}+${PBS_TAG}-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
-EXPECTED_SHA256="c13943cea39c918690c07067d30a44d7525fc630525e618548f2262b712511bf"
+EXPECTED_SHA256="18c56e105ba7713602536f49976c69d14d73cea7d32cfe2cb68eb8a79568de47"
 TAR_PATH="${WORK_DIR}/cpython.tar.gz"
 PREFIX="/opt/python${PY_MINOR}"
 DEST="${STAGE_DIR}${PREFIX}"
@@ -34,6 +34,17 @@ test -x "${UNPACK_DIR}/python/bin/python${PY_MINOR}"
 mkdir -p "$(dirname "${DEST}")"
 mv "${UNPACK_DIR}/python" "${DEST}"
 
+# python links libutil.so.1, which the Serenity base rootfs does not ship (only libc/libm/libdl/
+# libpthread/librt). Since glibc 2.34 it is an empty stub, so bundle the runner's copy (same glibc
+# as base) next to libpython; the interpreter's RPATH ($ORIGIN/../lib) resolves it there.
+LIBUTIL_SRC="${LIBUTIL_SRC:-/usr/lib/x86_64-linux-gnu/libutil.so.1}"
+if [ ! -f "${LIBUTIL_SRC}" ]; then
+    echo "ERROR: ${LIBUTIL_SRC} not found on build host" >&2
+    exit 1
+fi
+cp -L "${LIBUTIL_SRC}" "${DEST}/lib/libutil.so.1"
+chmod 0644 "${DEST}/lib/libutil.so.1"
+
 # Drop test suites & bytecode caches to keep the package small.
 rm -rf "${DEST}/lib/python${PY_MINOR}/test" "${DEST}/lib/python${PY_MINOR}/idlelib/idle_test"
 find "${DEST}" -type d -name __pycache__ -prune -exec rm -rf {} +
@@ -43,6 +54,28 @@ cat > "${DEST}/pip.conf" <<'EOF'
 [global]
 cert = /etc/ssl/certs/ca-certificates.crt
 EOF
+
+# Bundled OpenSSL defaults to cafile=/etc/ssl/cert.pem; Serenity only has the single bundle
+# /etc/ssl/certs/ca-certificates.crt (no hashed capath), so point the default at it.
+# This makes ssl/urllib/pip verify HTTPS even in shells that never source /etc/profile.d.
+mkdir -p "${STAGE_DIR}/etc/ssl"
+ln -sfn certs/ca-certificates.crt "${STAGE_DIR}/etc/ssl/cert.pem"
+
+# The bundled ncurses (readline / REPL / curses) searches /etc/terminfo:/lib/terminfo:/usr/share/terminfo.
+# Serenity has none, so `python3` would print "Cannot read termcap database" on every start.
+# Ship the runner's compiled terminfo entries (ncurses-base + ncurses-term, incl. alacritty).
+TERMINFO_SRCS="${TERMINFO_SRCS:-/lib/terminfo /usr/share/terminfo}"
+mkdir -p "${STAGE_DIR}/usr/share/terminfo"
+for src in ${TERMINFO_SRCS}; do
+    [ -d "${src}" ] || continue
+    cp -a "${src}/." "${STAGE_DIR}/usr/share/terminfo/"
+done
+for entry in x/xterm-256color l/linux d/dumb a/alacritty; do
+    if [ ! -f "${STAGE_DIR}/usr/share/terminfo/${entry}" ]; then
+        echo "ERROR: terminfo entry ${entry} missing (install ncurses-base ncurses-term on the build host)" >&2
+        exit 1
+    fi
+done
 
 # Real symlinks (not shell wrappers) so venv records a resolvable base interpreter.
 mkdir -p "${STAGE_DIR}/usr/bin"
@@ -56,6 +89,11 @@ ln -sfn "pip3" "${STAGE_DIR}/usr/bin/pip"
 # Smoke test: core extension modules + creating a venv with pip inside it.
 PY="${DEST}/bin/python${PY_MINOR}"
 "${PY}" --version
+TERMINFO_DIRS="${STAGE_DIR}/usr/share/terminfo" TERM=xterm-256color "${PY}" -c 'import readline' 2>&1 | tee "${WORK_DIR}/rl.log"
+if grep -q termcap "${WORK_DIR}/rl.log"; then
+    echo "ERROR: readline still cannot find terminfo" >&2
+    exit 1
+fi
 "${PY}" -c 'import ssl, sqlite3, ctypes, zlib, lzma, bz2, hashlib, json, venv, ensurepip; print("  -> stdlib OK,", ssl.OPENSSL_VERSION)'
 TEST_VENV="${WORK_DIR}/test-venv"
 "${PY}" -m venv "${TEST_VENV}"
