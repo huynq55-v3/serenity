@@ -8,7 +8,7 @@ QEMU        := qemu-system-x86_64
 QEMU_MEM    ?= 512M
 QEMU_ACCEL  := $(shell test -r /dev/kvm -a -w /dev/kvm && echo "-enable-kvm -cpu host")
 
-.PHONY: help check-deps init spkg compositor shell-ui nushell coreutils kernel disk initramfs packages run run-gui run-compositor run-desktop run-initramfs smoke-test clean
+.PHONY: help check-deps init spkg compositor shell-ui capture nushell coreutils kernel disk initramfs packages run run-gui run-compositor run-desktop run-initramfs smoke-test clean
 
 help:
 	@echo "Serenity Linux Build Targets:"
@@ -17,6 +17,7 @@ help:
 	@echo "  make spkg           - Build Rust Package Manager spkg (x86_64-unknown-linux-musl)"
 	@echo "  make compositor     - Build Serenity Wayland Compositor (Smithay 0.7)"
 	@echo "  make shell-ui       - Build Serenity Login & Wi-Fi GUI Shell (iced)"
+	@echo "  make capture        - Build Serenity Screenshot & Screen Recorder (Ubuntu-style HUD)"
 	@echo "  make nushell        - Download static musl Nushell binary"
 	@echo "  make coreutils      - Download static musl uutils/coreutils binary"
 	@echo "  make kernel         - Download & compile minimal Linux Kernel -> build/bzImage"
@@ -66,6 +67,9 @@ compositor:
 
 shell-ui:
 	cargo build -p serenity-shell
+
+capture:
+	cargo build --release -p serenity-capture
 
 alacritty:
 	cargo install alacritty --root $(BUILD_DIR)/userland --locked

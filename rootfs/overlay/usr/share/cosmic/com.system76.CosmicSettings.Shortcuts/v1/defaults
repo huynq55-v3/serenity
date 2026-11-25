@@ -112,6 +112,8 @@
     (modifiers: [Super, Shift], key: "Tab"): System(WindowSwitcherPrevious),
 
     (modifiers: [], key: "Print"): System(Screenshot),
+    (modifiers: [Shift], key: "Print"): Spawn("serenity-capture --full"),
+    (modifiers: [Ctrl, Alt, Shift], key: "r"): Spawn("serenity-capture --record"),
     (modifiers: [], key: "XF86AudioRaiseVolume"): System(VolumeRaise),
     (modifiers: [], key: "XF86AudioLowerVolume"): System(VolumeLower),
     (modifiers: [], key: "XF86AudioMute"): System(Mute),

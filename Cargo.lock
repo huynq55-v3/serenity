@@ -2531,6 +2531,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "serenity-capture"
+version = "2.0.0"
+dependencies = [
+ "ab_glyph",
+ "libc",
+ "memmap2",
+ "png",
+ "tiny-skia",
+ "tokio",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+ "zbus",
+]
+
+[[package]]
 name = "serenity-compositor"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,21 @@
+[package]
+name = "serenity-capture"
+version = "2.0.0"
+edition = "2021"
+description = "Ubuntu-style Wayland screenshot and screen recorder for Serenity Linux (COSMIC / ext-image-copy-capture-v1)"
+
+[[bin]]
+name = "serenity-capture"
+path = "src/main.rs"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+tiny-skia = "0.11"
+ab_glyph = "0.2"
+png = "0.17"
+memmap2 = "0.9"
+libc = "0.2"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "time"] }

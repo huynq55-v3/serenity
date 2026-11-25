@@ -121,9 +121,10 @@ jobs:
               elif [ "${{ matrix.package }}" = "screenshot" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends \
-                  zstd git gcc meson ninja-build pkg-config \
+                  zstd git gcc binutils meson ninja-build pkg-config \
                   libwayland-dev libpixman-1-dev libpng-dev libjpeg-dev \
                   slurp wl-clipboard
+                cargo --version
               elif [ "${{ matrix.package }}" = "pipewire" ]; then
                 sudo apt-get update
                 sudo apt-get install -y --no-install-recommends \
@@ -279,7 +280,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ matrix.package }}-${{ hashFiles('packages/**/recipe.toml') }}
+          key: cargo-${{ matrix.package }}-${{ hashFiles('packages/**/recipe.toml', 'Cargo.lock') }}
           restore-keys: |
             cargo-${{ matrix.package }}-
             cargo-

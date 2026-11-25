@@ -1,0 +1,9 @@
+[package]
+name = "screen-recorder"
+version = "2.0.0"
+arch = "any"
+description = "Ubuntu-style Wayland Screen Recorder & PrintScreen Capture suite (meta-package for screenshot)"
+deps = ["screenshot"]
+
+[source]
+type = "meta"
