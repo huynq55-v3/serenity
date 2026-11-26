@@ -1,0 +1,217 @@
+[package]
+name = "htop"
+version = "3.3.0-r1"
+arch = "x86_64-gnu"
+description = "Interactive process viewer and system monitor (Ubuntu htop with private ncursesw/terminfo and COSMIC launcher)"
+deps = ["serenity-base"]
+
+[source]
+type = "custom"
+script = '''
+mkdir -p "${STAGE_DIR}/usr/lib/htop/bin" "${STAGE_DIR}/usr/lib/htop/lib" "${STAGE_DIR}/usr/lib/htop/terminfo" "${STAGE_DIR}/usr/bin"
+
+HTOP_BIN="$(command -v htop || true)"
+if [ -z "${HTOP_BIN}" ] || [ ! -x "${HTOP_BIN}" ]; then
+    echo "ERROR: htop binary not found on build host (install htop)" >&2
+    exit 1
+fi
+cp -L "${HTOP_BIN}" "${STAGE_DIR}/usr/lib/htop/bin/htop"
+chmod 0755 "${STAGE_DIR}/usr/lib/htop/bin/htop"
+
+# Bundle non-glibc shared libraries (ncursesw, tinfo, libnl, optional libsensors) privately into /usr/lib/htop/lib
+python3 - "${STAGE_DIR}/usr/lib/htop/bin" "${STAGE_DIR}/usr/lib/htop/lib" <<'PY'
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+bin_dir = Path(sys.argv[1])
+lib_dir = Path(sys.argv[2])
+lib_dir.mkdir(parents=True, exist_ok=True)
+skip = (
+    "ld-linux-",
+    "libc.so",
+    "libm.so",
+    "libdl.so",
+    "libpthread.so",
+    "librt.so",
+    "libutil.so",
+    "libcrypt.so",
+    "libmvec.so",
+)
+
+seen = set()
+queue = [p for p in sorted(bin_dir.iterdir()) if p.is_file()]
+
+# htop optionally dlopen()s libsensors.so.5 for CPU temperature readings.
+sensors_cand = Path("/usr/lib/x86_64-linux-gnu/libsensors.so.5")
+if not sensors_cand.exists():
+    matches = sorted(Path("/usr/lib/x86_64-linux-gnu").glob("libsensors.so.5*"))
+    if matches:
+        sensors_cand = matches[0]
+if sensors_cand.exists():
+    dst = lib_dir / "libsensors.so.5"
+    shutil.copy2(sensors_cand.resolve(), dst)
+    os.chmod(dst, 0o644)
+    seen.add("libsensors.so.5")
+    queue.append(dst)
+
+while queue:
+    cur = queue.pop(0)
+    proc = subprocess.run(["ldd", str(cur)], capture_output=True, text=True)
+    for line in proc.stdout.splitlines():
+        for tok in line.split():
+            if tok.startswith("/") and (tok.startswith("/usr/lib") or tok.startswith("/lib")):
+                dep = Path(tok)
+                name = dep.name
+                if name.startswith(skip) or name in seen or not dep.exists():
+                    continue
+                seen.add(name)
+                dst = lib_dir / name
+                shutil.copy2(dep.resolve(), dst)
+                os.chmod(dst, 0o644)
+                queue.append(dst)
+
+print(f"  -> Bundled {len(seen)} shared libraries into {lib_dir}")
+PY
+
+# Copy essential compiled terminfo entries privately so htop works standalone without clashing with python's /usr/share/terminfo
+for entry in \
+    a/alacritty a/alacritty-direct \
+    x/xterm x/xterm-color x/xterm-256color x/xterm-direct \
+    l/linux v/vt100 v/vt220 \
+    s/screen s/screen-256color \
+    t/tmux t/tmux-256color \
+    d/dumb; do
+    for src_root in /lib/terminfo /usr/share/terminfo; do
+        if [ -f "${src_root}/${entry}" ]; then
+            mkdir -p "${STAGE_DIR}/usr/lib/htop/terminfo/$(dirname "${entry}")"
+            cp -L "${src_root}/${entry}" "${STAGE_DIR}/usr/lib/htop/terminfo/${entry}"
+            break
+        fi
+    done
+done
+
+for req in a/alacritty x/xterm-256color l/linux v/vt100; do
+    if [ ! -f "${STAGE_DIR}/usr/lib/htop/terminfo/${req}" ]; then
+        echo "ERROR: required terminfo entry '${req}' missing (install ncurses-base ncurses-term)" >&2
+        exit 1
+    fi
+done
+
+# Smoke test staged binary against private lib/terminfo only
+export LD_LIBRARY_PATH="${STAGE_DIR}/usr/lib/htop/lib"
+LDD_OUT="$(ldd "${STAGE_DIR}/usr/lib/htop/bin/htop")"
+if grep -q "not found" <<< "${LDD_OUT}"; then
+    echo "ERROR: unresolved shared library in staged htop:" >&2
+    echo "${LDD_OUT}" >&2
+    exit 1
+fi
+"${STAGE_DIR}/usr/lib/htop/bin/htop" --version | grep -qi "htop"
+"${STAGE_DIR}/usr/lib/htop/bin/htop" --help >/dev/null
+
+python3 - "${STAGE_DIR}/usr/lib/htop/bin/htop" "${STAGE_DIR}/usr/lib/htop/lib" "${STAGE_DIR}/usr/lib/htop/terminfo" <<'PY'
+import fcntl
+import os
+import pty
+import select
+import struct
+import subprocess
+import sys
+import termios
+import time
+
+htop_bin, lib_dir, terminfo_dir = sys.argv[1:4]
+master_fd, slave_fd = pty.openpty()
+fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+
+env = os.environ.copy()
+env["LD_LIBRARY_PATH"] = lib_dir
+env["TERMINFO"] = terminfo_dir
+env["TERMINFO_DIRS"] = terminfo_dir
+env["TERM"] = "xterm-256color"
+
+proc = subprocess.Popen(
+    [htop_bin, "-d", "5"],
+    stdin=slave_fd,
+    stdout=slave_fd,
+    stderr=slave_fd,
+    env=env,
+    close_fds=True,
+)
+os.close(slave_fd)
+
+output = bytearray()
+deadline = time.monotonic() + 3.0
+while time.monotonic() < deadline:
+    rlist, _, _ = select.select([master_fd], [], [], 0.2)
+    if rlist:
+        try:
+            chunk = os.read(master_fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        output.extend(chunk)
+        if len(output) > 100:
+            break
+
+if len(output) <= 100:
+    proc.kill()
+    os.close(master_fd)
+    raise RuntimeError(f"htop emitted insufficient TUI output ({len(output)} bytes)")
+
+os.write(master_fd, b"q")
+try:
+    rc = proc.wait(timeout=1.0)
+except subprocess.TimeoutExpired:
+    os.write(master_fd, b"q")
+    rc = proc.wait(timeout=2.0)
+
+os.close(master_fd)
+if rc != 0:
+    raise RuntimeError(f"htop exited with non-zero code {rc} in PTY smoke test")
+print(f"  -> PTY smoke test OK ({len(output)} bytes TUI output, exit={rc})")
+PY
+'''
+
+[install.scripts]
+"usr/bin/htop" = '''#!/bin/sh
+export LD_LIBRARY_PATH="/usr/lib/htop/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export TERMINFO_DIRS="/usr/lib/htop/terminfo:/usr/share/terminfo:/lib/terminfo${TERMINFO_DIRS:+:$TERMINFO_DIRS}"
+if [ -z "${TERM:-}" ] || [ "${TERM:-}" = "dumb" ]; then
+    export TERM="xterm-256color"
+fi
+exec /usr/lib/htop/bin/htop "$@"
+'''
+
+[install.inline]
+"usr/share/icons/hicolor/scalable/apps/htop.svg" = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#1B1F27"/>
+  <rect x="5" y="5" width="54" height="54" rx="13" fill="none" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="2"/>
+  <rect x="13" y="16" width="38" height="7" rx="3" fill="#2A313D"/>
+  <rect x="13" y="16" width="26" height="7" rx="3" fill="#4ADE80"/>
+  <rect x="13" y="27" width="38" height="7" rx="3" fill="#2A313D"/>
+  <rect x="13" y="27" width="19" height="7" rx="3" fill="#38BDF8"/>
+  <rect x="13" y="38" width="38" height="7" rx="3" fill="#2A313D"/>
+  <rect x="13" y="38" width="30" height="7" rx="3" fill="#FBBF24"/>
+  <circle cx="48" cy="49" r="3" fill="#4ADE80"/>
+  <rect x="13" y="47" width="28" height="3.5" rx="1.75" fill="#64748B"/>
+</svg>
+'''
+
+"usr/share/applications/htop.desktop" = '''[Desktop Entry]
+Version=1.0
+Name=Htop System Monitor
+GenericName=Process Viewer
+Comment=Interactive CPU, memory, and process viewer (htop)
+Exec=/usr/bin/alacritty --title "htop - System Monitor" -e /usr/bin/htop
+Icon=htop
+Terminal=false
+StartupNotify=true
+StartupWMClass=Alacritty
+Type=Application
+Categories=System;Monitor;
+Keywords=htop;top;process;task;monitor;cpu;memory;system;
+'''
